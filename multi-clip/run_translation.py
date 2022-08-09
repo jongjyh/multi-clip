@@ -54,7 +54,8 @@ from transformers import (
     RobertaConfig
 )
 from modeling_kd import KDmodel
-
+import torch.nn as nn
+import torch
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.18.0")
@@ -235,19 +236,29 @@ class DataTrainingArguments:
         if self.val_max_target_length is None:
             self.val_max_target_length = self.max_target_length
 
+@dataclass
+class KDArguments:
+    """
+    to be continued.
+    """
+
+    loss_fn: str = field(default=None, metadata={"help": "to be continued."})
+    pooler_fn: str = field(default=None, metadata={"help": "to be continued."})
+    layer_kd: bool = field(default=False, metadata={"help": "to be continued."})
+    teacher_model: str = field(default=None, metadata={"help": "to be continued."})
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments,KDArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args,kd_args = parser.parse_args_into_dataclasses()
 
     # Setup logging
     logging.basicConfig(
@@ -310,12 +321,16 @@ def main():
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.dataset_name is not None:
+        if True:
+            # load from local 
+            raw_datasets = datasets.load_from_disk(data_args.dataset_name)
+        else:
         # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            data_args.dataset_name,
-            cache_dir=model_args.cache_dir,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+            raw_datasets = load_dataset(
+                data_args.dataset_name,
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -359,8 +374,16 @@ def main():
     )
     
     if True:
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
-        kd_config = RobertaConfig.from_pretrained("xlm-roberta-large")
+        from transformers import PretrainedConfig
+        processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
+        kd_config_dict = {
+            "teacher_model":kd_args.teacher_model,
+            "student_model":model_args.model_name_or_path,
+            "loss_fn":kd_args.loss_fn,
+            "pooler_fn":kd_args.pooler_fn,
+            "layer_kd":kd_args.layer_kd,
+        }
+        kd_config = PretrainedConfig(**kd_config_dict)
         model = KDmodel(kd_config)
     else:
         model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -430,7 +453,7 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
         
-    source_attr = "caption_sv"
+    source_attr = "caption_zh"
     target_attr = "caption"
     def preprocess_function(examples):
         # source language -> tokenizer 
@@ -439,7 +462,7 @@ def main():
             inputs = [ex for ex in examples[source_attr]]
             targets = [ex for ex in examples[target_attr]]
             model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-            teacher_inputs = processor(inputs, max_length=data_args.max_source_length,padding=padding,truncation=True,)
+            teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
             
             model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
             model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
@@ -532,32 +555,57 @@ def main():
         )
 
     # Metric
-    metric = load_metric("sacrebleu")
+    # metric = load_metric("sacrebleu")
 
-    def postprocess_text(preds, labels):
-        preds = [pred.strip() for pred in preds]
-        labels = [[label.strip()] for label in labels]
+    # def postprocess_text(preds, labels):
+    #     preds = [pred.strip() for pred in preds]
+    #     labels = [[label.strip()] for label in labels]
 
-        return preds, labels
+    #     return preds, labels
+
+    # def compute_metrics(eval_preds):
+    #     preds, labels = eval_preds
+    #     if isinstance(preds, tuple):
+    #         preds = preds[0]
+    #     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+    #     if data_args.ignore_pad_token_for_loss:
+    #         # Replace -100 in the labels as we can't decode them.
+    #         labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+    #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+    #     # Some simple post-processing
+    #     decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+
+    #     result = metric.compute(predictions=decoded_preds, references=decoded_labels)
+    #     result = {"bleu": result["score"]}
+
+    #     prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
+    #     result["gen_len"] = np.mean(prediction_lens)
+    #     result = {k: round(v, 4) for k, v in result.items()}
+    #     return result
 
     def compute_metrics(eval_preds):
-        preds, labels = eval_preds
+        preds, _ = eval_preds
         if isinstance(preds, tuple):
-            preds = preds[0]
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        if data_args.ignore_pad_token_for_loss:
-            # Replace -100 in the labels as we can't decode them.
-            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+            x,y = preds[0],preds[1]
+        
+        # convert to tensor 
+        x,y = torch.from_numpy(x),torch.from_numpy(y)
 
-        # Some simple post-processing
-        decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+        cosine_sim = nn.CosineEmbeddingLoss()
+        mse = nn.MSELoss()
+        l1 = nn.L1Loss()
+        assert len(x) == len(y)
+        cos_loss = cosine_sim(x,y,torch.Tensor([1.])).item()
+        mse_loss = mse(x,y).item()
+        l1_loss = l1(x,y).item()
+        
+        result = {
+            "cosine_similarity":cos_loss,
+            "mse":mse_loss,
+            "l1_loss":l1_loss,
+        }
 
-        result = metric.compute(predictions=decoded_preds, references=decoded_labels)
-        result = {"bleu": result["score"]}
-
-        prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        result["gen_len"] = np.mean(prediction_lens)
         result = {k: round(v, 4) for k, v in result.items()}
         return result
 
@@ -569,7 +617,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=compute_metrics if training_args.predict_with_generate else None,
+        compute_metrics=compute_metrics ,
     )
 
     # Training
