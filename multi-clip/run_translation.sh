@@ -1,9 +1,9 @@
 lr=2e-5
-wd=1e-1
-ep=10
+wd=1e-4
+ep=1
 seed=42
-loss_fn=cosine
-pooler_fn=cls
+loss_fn=mse
+pooler_fn=average
 layer_kd=true
 task=multi-clip
 student=hfl/chinese-roberta-wwm-ext
@@ -35,3 +35,6 @@ CUDA_VISIBLE_DEVICES=0 WANDB_DISABLED=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLI
     --layer_kd ${layer_kd} \
     --overwrite_output_dir \
     --teacher_model ${teacher} \
+    --load_best_model_at_end \
+    --max_train_samples 128 \
+    --max_eval_samples 128  

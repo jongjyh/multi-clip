@@ -12,14 +12,15 @@ loss_fn=mse
 pooler_fn=average
 layer_kd=false
 task=multi-clip
-# student=hfl/chinese-roberta-wwm-ext-large
 student=hfl/chinese-roberta-wwm-ext
-# teacher=openai/clip-vit-large-patch14
-teacher=openai/clip-vit-base-patch32
+# student=hfl/chinese-roberta-wwm-ext
+teacher=openai/clip-vit-large-patch14
+# teacher=openai/clip-vit-base-patch32
 alpha=.1
 dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc3m-zh 
+bs=256
 # dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc100k-zh 
-run_name=baai/${student}_${teacher}_${loss_fn}_${pooler_fn}_lkd${layer_kd}_loss${alpha}_wd${wd}_lr${lr}_ep${ep}_sd${seed}_dst${dst}
+run_name=baai/${student}_${teacher}_${loss_fn}_${pooler_fn}_lkd${layer_kd}_loss${alpha}_wd${wd}_bs${bs}lr${lr}_ep${ep}_sd${seed}_dst${dst}
 CUDA_VISIBLE_DEVICES=0 WANDB_MODE=online HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python /home/chenzhongzhi/repo/multi-clip/multi-clip/run_translation.py  \
     --model_name_or_path ${student} \
     --do_train \
@@ -39,7 +40,7 @@ CUDA_VISIBLE_DEVICES=0 WANDB_MODE=online HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFL
     --logging_steps 500 \
     --output_dir ckpt/${task}/${run_name} \
     --dataset_name $dst \
-    --per_device_train_batch_size 256 \
+    --per_device_train_batch_size $bs \
     --per_device_eval_batch_size 128 \
     --metric_for_best_model eval_cossim_loss \
     --greater_is_better false \

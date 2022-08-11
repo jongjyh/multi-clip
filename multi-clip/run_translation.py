@@ -53,6 +53,8 @@ from transformers import (
     CLIPProcessor,
     RobertaConfig
 )
+from transformers.models.clip.modeling_clip import CLIPModel
+from modeling_chclip import ChineseCLIP,ChCLIPConfig,CHCLIPProcess
 from modeling_kd import KDmodel
 import torch.nn as nn
 import torch
@@ -137,7 +139,7 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     preprocessing_num_workers: Optional[int] = field(
-        default=None,
+        default=16,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     max_source_length: Optional[int] = field(
@@ -246,6 +248,7 @@ class KDArguments:
     pooler_fn: str = field(default=None, metadata={"help": "to be continued."})
     layer_kd: bool = field(default=False, metadata={"help": "to be continued."})
     teacher_model: str = field(default=None, metadata={"help": "to be continued."})
+    alpha: float = field(default=.1, metadata={"help": "to be continued."})
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -375,13 +378,16 @@ def main():
     
     if True:
         from transformers import PretrainedConfig
+        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
         processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
+        mix_processor = CHCLIPProcess(feature_extractor=processor.feature_extractor,tokenizer=tokenizer)
         kd_config_dict = {
             "teacher_model":kd_args.teacher_model,
             "student_model":model_args.model_name_or_path,
             "loss_fn":kd_args.loss_fn,
             "pooler_fn":kd_args.pooler_fn,
             "layer_kd":kd_args.layer_kd,
+            "alpha":kd_args.alpha
         }
         kd_config = PretrainedConfig(**kd_config_dict)
         model = KDmodel(kd_config)
@@ -601,7 +607,7 @@ def main():
         l1_loss = l1(x,y).item()
         
         result = {
-            "cosine_similarity":cos_loss,
+            "cossim_loss":cos_loss,
             "mse":mse_loss,
             "l1_loss":l1_loss,
         }
@@ -682,6 +688,16 @@ def main():
                 output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
                 with open(output_prediction_file, "w", encoding="utf-8") as writer:
                     writer.write("\n".join(predictions))
+
+    # save as clip model
+    kd_model = trainer.model
+    chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
+    chinese_clip_config.text_config = kd_model.student_config
+    chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
+    chinese_clip.text_model = kd_model.student
+    chinese_clip.save_pretrained(training_args.output_dir+"/student_model")
+    mix_processor.save_pretrained(training_args.output_dir+"/student_model")
+
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "translation"}
     if data_args.dataset_name is not None:
