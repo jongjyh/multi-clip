@@ -5,7 +5,7 @@ from transformers import AutoConfig
 import torch 
 from typing import Optional,List
 import torch.nn as nn
-from modeling_chclip import BertSeriesConfig,BertSeriesModelWithTransformation
+from .modeling_chclip import BertSeriesConfig,BertSeriesModelWithTransformation
 
 
     
@@ -46,6 +46,10 @@ class KDmodel(PreTrainedModel):
     def freeze(self):
         for _,m in self.teacher.named_parameters():
             m.requires_grad_(False)
+        for n,m in self.student.named_parameters():
+            if 'embeddings.word_embeddings.weight' in n:
+                print(n)
+                m.requires_grad_(False)
 
     def forward(
         self,
@@ -57,8 +61,6 @@ class KDmodel(PreTrainedModel):
         inputs_embeds: Optional[torch.Tensor] = None,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         teacher_input_ids = None,

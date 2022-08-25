@@ -56,10 +56,13 @@ from transformers import (
 from transformers.models.clip.modeling_clip import CLIPModel
 from models.modeling_chclip import ChineseCLIP,ChCLIPConfig,CHCLIPProcess
 from models.modeling_kd import KDmodel
-import torch.nn as nn
-import torch
 
-from utils.data_shifting import * 
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.optim as optim
+from torch.nn.parallel import DistributedDataParallel as DDP
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.18.0")
 
@@ -251,10 +254,13 @@ class KDArguments:
     teacher_model: str = field(default=None, metadata={"help": "to be continued."})
     alpha: float = field(default=.1, metadata={"help": "to be continued."})
 
-def main():
+def main(rank,world_size):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    # create default process group
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments,KDArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -391,13 +397,17 @@ def main():
             "alpha":kd_args.alpha
         }
         kd_config = PretrainedConfig(**kd_config_dict)
-        model = KDmodel(kd_config)
+        # 
+        model = KDmodel(kd_config).to(rank)
+        # cause we do not update all the parameters
+        ddp_model = DDP(model,device_ids=[rank],find_unused_parameters=True)
+        training_args.locak_rank = rank
 
         # some exp setting will be excuted here
+        # from utils.data_shifting import en_word_embedding_zero_shifting,en_word_embedding_zero_norm
         
         # en_word_embedding_zero_shifting(model.student,mix_processor.tokenizer,eps=1e-2)
         # en_word_embedding_zero_norm(model.student,mix_processor.tokenizer)
-        zh_en_word_embedding_shift(model.student,mix_processor.tokenizer)
 
     else:
         model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -467,8 +477,8 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
         
-    # source_attr = "caption_zh"
-    source_attr = "caption"
+    source_attr = "caption_zh"
+    # source_attr = "caption"
     target_attr = "caption"
     def preprocess_function(examples):
         # source language -> tokenizer 
@@ -626,7 +636,7 @@ def main():
 
     # Initialize our Trainer
     trainer = Seq2SeqTrainer(
-        model=model,
+        model=ddp_model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
@@ -699,15 +709,13 @@ def main():
                     writer.write("\n".join(predictions))
 
     # save as clip model
-    if training_args.local_rank==0 or training_args.local_rank == -1 :
-        kd_model = trainer.model
-        chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
-        chinese_clip_config.text_config = kd_model.student_config
-        chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
-        chinese_clip.text_model = kd_model.student
-        chinese_clip.save_pretrained(training_args.output_dir)
-        mix_processor.save_pretrained(training_args.output_dir)
-
+    kd_model = trainer.model
+    chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
+    chinese_clip_config.text_config = kd_model.student_config
+    chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
+    chinese_clip.text_model = kd_model.student
+    chinese_clip.save_pretrained(training_args.output_dir+"/student_model")
+    mix_processor.save_pretrained(training_args.output_dir+"/student_model")
 
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "translation"}
@@ -737,4 +745,14 @@ def _mp_fn(index):
 
 
 if __name__ == "__main__":
-    main()
+    # Environment variables which need to be
+    # set when using c10d's default "env"
+    # initialization mode.
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "29500"
+    world_size = 2
+    mp.spawn(main,
+        args=(world_size,),
+        nprocs=world_size,
+        join=True)
+    # main()

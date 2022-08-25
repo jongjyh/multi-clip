@@ -35,6 +35,7 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.transformation = nn.Linear(config.hidden_size,config.project_dim)
         self.pre_LN=nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        # self.activation = nn.Tanh()
         
         # self.post_LN=nn.LayerNorm(config.project_dim, eps=config.layer_norm_eps)
         self.post_LN=None
@@ -85,6 +86,7 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
         
         # last module outputs
         sequence_output = outputs[0]
+        
 
         # project every module
         if self.pre_LN is not None:
