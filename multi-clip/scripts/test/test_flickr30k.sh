@@ -4,8 +4,10 @@ dataset=flickr30k-cn
 # model=bs-bs-3m
 # model=bs-bs-8m
 # model=lg-lg-3m
-# model=lg-lg-8m
-model=brivl
+# model=lg-lg-3m-enc
+model=lg-lg-8m
+# model=brivl
+# model=kd_3e-4
 path=/sharefs/czz/save_ckpt/${model}
 
 if [ $model != 'brivl' ];then

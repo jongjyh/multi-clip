@@ -5,39 +5,21 @@ from transformers import AutoConfig
 import torch 
 from typing import Optional,List
 import torch.nn as nn
-from transformers.models.roberta.configuration_roberta import RobertaConfig
-from .modeling_chclip import BertSeriesConfig,BertSeriesModelWithTransformation, RobertaSeriesModelWithTransformation
+from .modeling_chclip import BertSeriesConfig,BertSeriesModelWithTransformation
 
-STUDENT_CONFIG_DICT={
-    'hfl/chinese-roberta-wwm-ext':BertSeriesConfig,
-    'hfl/chinese-roberta-wwm-ext-large':BertSeriesConfig,
-    'xlm-roberta-large':RobertaConfig,
-    'xlm-roberta-base':RobertaConfig,
-}
+
     
-STUDENT_MODEL_DICT={
-    'hfl/chinese-roberta-wwm-ext':BertSeriesModelWithTransformation,
-    'hfl/chinese-roberta-wwm-ext-large':BertSeriesModelWithTransformation,
-    'xlm-roberta-large':RobertaSeriesModelWithTransformation,
-    'xlm-roberta-base':RobertaSeriesModelWithTransformation,
-
-}
     
 class KDmodel(PreTrainedModel):
     def __init__(self,config,):
         super().__init__(config,)
         # init student and teacher
         self.teacher = CLIPTextModel.from_pretrained(config.teacher_model)
-        student_config = STUDENT_CONFIG_DICT[config.student_model].from_pretrained(config.student_model)
+        student_config = BertSeriesConfig.from_pretrained(config.student_model)
         student_config.project_dim = self.teacher.config.hidden_size
         student_config.pooler_fn = config.pooler_fn
-        student_config.learn_encoder = config.learn_encoder
-        self.learn_encoder = config.learn_encoder
-        # no Dropout
-        student_config.hidden_dropout_prob = 0.
-        student_config.attention_probs_dropout_prob=0. 
-
-        self.student = STUDENT_MODEL_DICT[config.student_model].from_pretrained(config.student_model,config=student_config)
+        student_config.learn_encoder = True
+        self.student = BertSeriesModelWithTransformation.from_pretrained(config.student_model,**{'config':student_config})
         self.student_config = self.student.config
         self.teacher_config = self.teacher.config
         self.loss_fn =config.loss_fn
@@ -114,8 +96,7 @@ class KDmodel(PreTrainedModel):
         # learn pooler
         x,y = student_outputs['pooler_output'],teacher_outputs.pooler_output
         # learn encoder
-        if self.learn_encoder:
-            x1,y1 = student_outputs['mimic_states'].mean(-2),teacher_outputs.hidden_states[-1].mean(-2)
+        x1,y1 = student_outputs['mimic_states'].mean(-2),teacher_outputs.hidden_states[-1].mean(-2)
 
         # loss 
         if self.loss_fn=='mse':
@@ -126,10 +107,7 @@ class KDmodel(PreTrainedModel):
             # partial for reduce redundant parameter 
             loss_fn = partial(loss_fn,target=torch.tensor([1.],device='cuda' if torch.cuda.is_available() else 'cpu'))
 
-        loss = loss_fn(x,y)
-        if self.learn_encoder:
-            loss += loss_fn(x1,y1)
-            
+        loss = loss_fn(x,y)+loss_fn(x1,y1)
         
         if self.layer_KD:
             teacher_hidden_states,student_hidden_states = teacher_outputs.hidden_states,student_outputs['hidden_states']

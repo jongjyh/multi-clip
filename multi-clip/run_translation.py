@@ -56,8 +56,12 @@ from transformers import (
 from transformers.models.clip.modeling_clip import CLIPModel
 from models.modeling_chclip import ChineseCLIP,ChCLIPConfig,CHCLIPProcess
 from models.modeling_kd import KDmodel
+from models.modeling_pre_kd import KDmodel as PreKDmodel
+from models.modeling_encoder_kd import KDmodel as EncoderKDModel
 import torch.nn as nn
 import torch
+import wandb 
+from utils.prekd_adapter import adding_adapter_layer
 
 from utils.data_shifting import * 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -250,6 +254,9 @@ class KDArguments:
     layer_kd: bool = field(default=False, metadata={"help": "to be continued."})
     teacher_model: str = field(default=None, metadata={"help": "to be continued."})
     alpha: float = field(default=.1, metadata={"help": "to be continued."})
+    kd_type: str = field(default='kd', metadata={"help": "to be continued."})
+    prekd_ckpt: str = field(default=None, metadata={"help": "to be continued."})
+    delta: str = field(default=None, metadata={"help": "to be continued."})
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -388,16 +395,32 @@ def main():
             "loss_fn":kd_args.loss_fn,
             "pooler_fn":kd_args.pooler_fn,
             "layer_kd":kd_args.layer_kd,
-            "alpha":kd_args.alpha
+            "alpha":kd_args.alpha,
+            "learn_encoder":True,
         }
         kd_config = PretrainedConfig(**kd_config_dict)
-        model = KDmodel(kd_config)
-
-        # some exp setting will be excuted here
+        if kd_args.kd_type == 'kd':
+        # for origin kd
+            model = KDmodel(kd_config) 
+        elif kd_args.kd_type == 'postkd':
+        # for post KD
+            model = KDmodel(kd_config) 
+            from models.modeling_chclip import ChineseCLIP
+            pre_clip = ChineseCLIP.from_pretrained(kd_args.prekd_ckpt)
+            model.student = pre_clip.text_model
+            model.student_config = model.student.config
+        elif kd_args.kd_type == 'prekd':
+        # for pre kd
+            model = PreKDmodel(kd_config)
+            # use adapter
+            if kd_args.delta == 'adapter' :
+                adding_adapter_layer(model.student,model.student.config.project_dim)
+            
+        # # some exp setting will be excuted here
         
         # en_word_embedding_zero_shifting(model.student,mix_processor.tokenizer,eps=1e-2)
         # en_word_embedding_zero_norm(model.student,mix_processor.tokenizer)
-        zh_en_word_embedding_shift(model.student,mix_processor.tokenizer)
+        # zh_en_word_embedding_shift(model.student,mix_processor.tokenizer)
 
     else:
         model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -467,20 +490,31 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
         
-    # source_attr = "caption_zh"
-    source_attr = "caption"
+    source_attr = "caption_zh"
+    # source_attr = "caption"
     target_attr = "caption"
-    def preprocess_function(examples):
+    learn_eng=True
+    def preprocess_function(examples,mode='train'):
         # source language -> tokenizer 
         # target language -> preprocess
+        
         if True:
             inputs = [ex for ex in examples[source_attr]]
             targets = [ex for ex in examples[target_attr]]
             model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+            if learn_eng and mode=='train':
+                eng_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True) 
+                for (k,v),(k1,v1) in zip(model_inputs.items(),eng_inputs.items()):
+                    model_inputs[k1] = [*v,*v1]
+
             teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
-            
             model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
             model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
+
+            if learn_eng and mode=='train':
+                model_inputs['teacher_input_ids'] = [ *teacher_inputs['input_ids'],*teacher_inputs['input_ids'] ] 
+                model_inputs['teacher_attention_mask'] = [ *teacher_inputs['attention_mask'],*teacher_inputs['attention_mask'] ]
         else:
             inputs = [ex[source_lang] for ex in examples['translation']]
             targets = [ex[target_lang] for ex in examples['translation']]
@@ -513,7 +547,7 @@ def main():
             train_dataset = train_dataset.select(range(max_train_samples))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
-                preprocess_function,
+                lambda x:preprocess_function(x,mode='train'),
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -531,7 +565,7 @@ def main():
             eval_dataset = eval_dataset.select(range(max_eval_samples))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
-                preprocess_function,
+                lambda x:preprocess_function(x,mode='eval'),
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -703,6 +737,7 @@ def main():
         kd_model = trainer.model
         chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
         chinese_clip_config.text_config = kd_model.student_config
+        from models.modeling_chclip import ChineseCLIP
         chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
         chinese_clip.text_model = kd_model.student
         chinese_clip.save_pretrained(training_args.output_dir)
@@ -731,9 +766,6 @@ def main():
     return results
 
 
-def _mp_fn(index):
-    # For xla_spawn (TPUs)
-    main()
 
 
 if __name__ == "__main__":

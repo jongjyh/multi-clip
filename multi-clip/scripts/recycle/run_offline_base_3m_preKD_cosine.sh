@@ -6,9 +6,9 @@ export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_pr
 # exp
 lr=2e-5
 wd=1e-4
-ep=10
+ep=30
 seed=42
-loss_fn=mse
+loss_fn=cosine
 pooler_fn=average
 layer_kd=false
 task=multi-clip
@@ -17,17 +17,22 @@ student=hfl/chinese-roberta-wwm-ext
 # teacher=openai/clip-vit-large-patch14
 teacher=openai/clip-vit-base-patch32
 alpha=.1
-# dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc3m-zh 
+# dst=/sharefs/czz/datasets/mt/merge_cc3m_tsl2019
+dst=/sharefs/czz/datasets/multi-clip/cc3m-zh
 bs=256
-dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc100k-zh 
-run_name=baai/selfsupervised_normshift_${student}_${teacher}_${loss_fn}_${pooler_fn}_lkd${layer_kd}_loss${alpha}_wd${wd}_bs${bs}lr${lr}_ep${ep}_sd${seed}_dst${dst}
-CUDA_VISIBLE_DEVICES=0 WANDB_MODE=online HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python /home/chenzhongzhi/repo/multi-clip/multi-clip/run_translation.py  \
+# dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc100k-zh 
+gpus=2
+
+run_name=baai/robBase_vitBase32_${loss_fn}_${pooler_fn}_lkd${layer_kd}_loss${alpha}_wd${wd}_bs${bs}lr${lr}_ep${ep}_sd${seed}_3m_prekd
+
+WANDB_MODE=online HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m torch.distributed.launch \
+    --nproc_per_node $gpus /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
     --model_name_or_path ${student} \
     --do_train \
     --do_eval \
     --source_lang zh \
     --target_lang en \
-    --max_source_length 75 \
+    --max_source_length 30 \
     --num_train_epochs $ep \
     --weight_decay $wd \
     --learning_rate $lr \
@@ -47,7 +52,6 @@ CUDA_VISIBLE_DEVICES=0 WANDB_MODE=online HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFL
     --loss_fn ${loss_fn} \
     --pooler_fn ${pooler_fn}  \
     --layer_kd ${layer_kd} \
-    --overwrite_output_dir \
     --teacher_model ${teacher} \
     --load_best_model_at_end \
     --alpha ${alpha} \
