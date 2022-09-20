@@ -51,13 +51,9 @@ from transformers.utils.versions import require_version
 
 from transformers import (
     CLIPProcessor,
-    RobertaConfig
 )
-from transformers.models.clip.modeling_clip import CLIPModel
 from models.modeling_chclip import ChineseCLIP,ChCLIPConfig,CHCLIPProcess
 from models.modeling_kd import KDmodel
-from models.modeling_pre_kd import KDmodel as PreKDmodel
-from models.modeling_encoder_kd import KDmodel as EncoderKDModel
 import torch.nn as nn
 import torch
 import wandb 
@@ -396,7 +392,8 @@ def main():
             "pooler_fn":kd_args.pooler_fn,
             "layer_kd":kd_args.layer_kd,
             "alpha":kd_args.alpha,
-            "learn_encoder":True,
+            "learn_encoder":False,
+            "kd_type":kd_args.kd_type,
         }
         kd_config = PretrainedConfig(**kd_config_dict)
         if kd_args.kd_type == 'kd':
@@ -409,9 +406,9 @@ def main():
             pre_clip = ChineseCLIP.from_pretrained(kd_args.prekd_ckpt)
             model.student = pre_clip.text_model
             model.student_config = model.student.config
-        elif kd_args.kd_type == 'prekd':
+        elif 'prekd' in kd_args.kd_type :
         # for pre kd
-            model = PreKDmodel(kd_config)
+            model = KDmodel(kd_config)
             # use adapter
             if kd_args.delta == 'adapter' :
                 adding_adapter_layer(model.student,model.student.config.project_dim)
@@ -490,10 +487,10 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
         
-    source_attr = "caption_zh"
-    # source_attr = "caption"
+    # source_attr = "caption_zh"
+    source_attr = "caption"
     target_attr = "caption"
-    learn_eng=True
+    learn_eng=False
     def preprocess_function(examples,mode='train'):
         # source language -> tokenizer 
         # target language -> preprocess
@@ -737,7 +734,6 @@ def main():
         kd_model = trainer.model
         chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
         chinese_clip_config.text_config = kd_model.student_config
-        from models.modeling_chclip import ChineseCLIP
         chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
         chinese_clip.text_model = kd_model.student
         chinese_clip.save_pretrained(training_args.output_dir)

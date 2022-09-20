@@ -5,7 +5,7 @@ from transformers import AutoConfig
 import torch 
 from typing import Optional,List
 import torch.nn as nn
-from .modeling_chclip import BertSeriesConfig,BertSeriesModelWithTransformation
+from .modeling_berts import BertSeriesConfig,BertSeriesModelWithTransformation
 
 
     

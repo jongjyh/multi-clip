@@ -1,5 +1,4 @@
 from opendelta import AdapterModel
-from models.modeling_chclip import BertSeriesModelWithTransformation,BertSeriesConfig
 
 def adding_adapter_layer(text_encoder,bottleneck_dim):
     # add adapter after every tfm module
