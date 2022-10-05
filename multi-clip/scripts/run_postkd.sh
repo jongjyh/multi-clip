@@ -1,33 +1,34 @@
-# # ladder
-# /sharefs/czz/clash/clash-linux-amd64-v1.11.4 -d /sharefs/czz/clash  &>/dev/null & 
-# sleep 1s
-# export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=sock5://127.0.0.1:7891
+# ladder
+/sharefs/czz/clash/clash-linux-amd64-v1.11.4 -d /sharefs/czz/clash &>/dev/null & 
+sleep 1s
+export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=sock5://127.0.0.1:7891
 
 # exp
 lr=1e-4
 wd=1e-4
-ep=5
+ep=10
 seed=42
 loss_fn=mse
-pooler_fn=average
+pooler_fn=cls
 layer_kd=false
 task=multi-clip
 student=xlm-roberta-base
 # student=hfl/chinese-roberta-wwm-ext
-# teacher=openai/clip-vit-large-patch14
-teacher=openai/clip-vit-base-patch32
+teacher=openai/clip-vit-large-patch14
+# teacher=openai/clip-vit-base-patch32
+# teacher=openai/clip-vit-base-patch16
 alpha=.1
 # dst=/sharefs/czz/datasets/mt/merge_cc3m_tsl2019
 dst=/sharefs/czz/datasets/multi-clip/cc3m-zh
 bs=512
 # dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc100k-zh 
-gpus=2
+gpus=4
 
 warmup_steps=1000
 kd_type=postkd
-prekd_ckpt=/home/chenzhongzhi/ckpt/xlm_base_2_mse_average_wd1e-4_bs512_lr5e-4_warm1000_ep5_sd42_prekd_embed
+prekd_ckpt=/home/chenzhongzhi/ckpt/xlm_base_4_mse_cls_wd1e-4_bs512_lr2e-4_warm0.1_ep10_sd42_prekd_word_cls_freeze
 # prekd_ckpt=/home/chenzhongzhi/ckpt/robBase_vitBase32_2_mse_average_wd1e-4_bs512_lr5e-4_warm1000_ep5_sd42_prekd
-run_name=xlm_base_${gpus}_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_embed
+run_name=xlm_base_${gpus}_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_zh_cls
 
 WANDB_PROJECT=clip-kd  HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m torch.distributed.launch \
     --nproc_per_node $gpus /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
@@ -35,7 +36,6 @@ WANDB_PROJECT=clip-kd  HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m to
     --do_train \
     --do_eval \
     --warmup_steps ${warmup_steps} \
-    --fp16 \
     --source_lang zh \
     --target_lang en \
     --max_source_length 30 \
@@ -63,4 +63,3 @@ WANDB_PROJECT=clip-kd  HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m to
     --alpha ${alpha} \
     --kd_type ${kd_type} \
     --prekd_ckpt ${prekd_ckpt} \
-    --overwrite_output_dir true \

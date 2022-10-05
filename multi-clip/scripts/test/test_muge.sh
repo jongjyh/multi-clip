@@ -5,7 +5,7 @@ dataset=muge
 # model=bs-bs-8m
 # model=lg-lg-3m
 # model=lg-lg-8m
-model=lg30M
+model=xlm768-pretrain-zh-cls
 
 # for Chinese-CLIP
 # path='/sharefs/czz/repo/pretrained_weights/clip_cn_vit-b-16.pt'

@@ -7,8 +7,9 @@ model=origin
 # model=lg-lg-3m
 # model=lg-lg-8m
 # model=brivl
+model=xlm768-pretrain-zh-cls
 # for Chinese-CLIP
-path='/sharefs/czz/repo/pretrained_weights/clip_cn_vit-b-16.pt'
+# path='/sharefs/czz/repo/pretrained_weights/clip_cn_vit-b-16.pt'
 # path=/sharefs/czz/save_ckpt/${model}
 
 if [ $model != 'brivl' ];then

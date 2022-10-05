@@ -50,6 +50,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from models.modeling_chclip import CHCLIPProcess,ChineseCLIP
 
 logger = logging.getLogger(__name__)
 
@@ -282,17 +283,17 @@ def main():
     #
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
-        dataset = load_from_disk(
-            data_args.dataset_name,
-        )
-        # dataset = load_dataset(
+        # dataset = load_from_disk(
         #     data_args.dataset_name,
-        #     data_args.dataset_config_name,
-        #     cache_dir=model_args.cache_dir,
-        #     keep_in_memory=False,
-        #     data_dir=data_args.data_dir,
-        #     use_auth_token=True if model_args.use_auth_token else None,
         # )
+        dataset = load_dataset(
+            data_args.dataset_name,
+            data_args.dataset_config_name,
+            cache_dir=model_args.cache_dir,
+            keep_in_memory=False,
+            data_dir=data_args.data_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
+        )
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -319,9 +320,8 @@ def main():
             model_args.tokenizer_name, cache_dir=model_args.cache_dir, use_fast=model_args.use_fast_tokenizer
         )
     elif model_args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_args.model_name_or_path, cache_dir=model_args.cache_dir, use_fast=model_args.use_fast_tokenizer
-        )
+        processor = CHCLIPProcess.from_pretrained(model_args.model_name_or_path)
+        tokenizer = processor.tokenizer
     else:
         raise ValueError(
             "You are instantiating a new tokenizer from scratch. This is not supported by this script."
@@ -329,19 +329,16 @@ def main():
         )
 
     # Load feature_extractor, in this script we only use this to get the mean and std for normalization.
-    feature_extractor = AutoFeatureExtractor.from_pretrained(
-        model_args.feature_extractor_name or model_args.model_name_or_path,
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
-    )
+    feature_extractor = processor.feature_extractor
 
-    model = AutoModel.from_pretrained(
-        model_args.model_name_or_path,
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
-    )
+    # model = AutoModel.from_pretrained(
+    #     model_args.model_name_or_path,
+    #     cache_dir=model_args.cache_dir,
+    #     revision=model_args.model_revision,
+    #     use_auth_token=True if model_args.use_auth_token else None,
+    # )
+    
+    model = ChineseCLIP.from_pretrained(model_args.model_name_or_path)
     config = model.config
 
     def _freeze_params(module):
@@ -382,11 +379,11 @@ def main():
     if data_args.caption_column is None:
         caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
     else:
-        caption_column = data_args.caption_column.split(',')
-        # if caption_column not in column_names:
-        #     raise ValueError(
-        #         f"--caption_column' value '{data_args.caption_column}' needs to be one of: {', '.join(column_names)}"
-        #     )
+        # caption_column = data_args.caption_column.split(',')
+        if caption_column not in column_names:
+            raise ValueError(
+                f"--caption_column' value '{data_args.caption_column}' needs to be one of: {', '.join(column_names)}"
+            )
 
     # 7. Preprocessing the datasets.
     # Initialize torchvision transforms and jit it for faster processing.

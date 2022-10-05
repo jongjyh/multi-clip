@@ -52,14 +52,12 @@ from transformers.utils.versions import require_version
 from transformers import (
     CLIPProcessor,
 )
-from models.modeling_chclip import ChineseCLIP,ChCLIPConfig,CHCLIPProcess
+from models.modeling_chclip import ChCLIPConfig,CHCLIPProcess
 from models.modeling_kd import KDmodel
 import torch.nn as nn
 import torch
-import wandb 
-from utils.prekd_adapter import adding_adapter_layer
+# from utils.prekd_adapter import adding_adapter_layer
 
-from utils.data_shifting import * 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.18.0")
 
@@ -488,51 +486,64 @@ def main():
         )
         
     # source_attr = "caption_zh"
+    # # source_attr = "caption"
+    # target_attr = "caption"
+    # learn_eng=False
+    # def preprocess_function(examples,mode='train'):
+    #     # source language -> tokenizer 
+    #     # target language -> preprocess
+        
+    #     if True:
+    #         inputs = [ex for ex in examples[source_attr]]
+    #         targets = [ex for ex in examples[target_attr]]
+    #         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+    #         if learn_eng and mode=='train':
+    #             eng_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True) 
+    #             for (k,v),(k1,v1) in zip(model_inputs.items(),eng_inputs.items()):
+    #                 model_inputs[k1] = [*v,*v1]
+
+    #         teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
+    #         model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
+    #         model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
+
+    #         if learn_eng and mode=='train':
+    #             model_inputs['teacher_input_ids'] = [ *teacher_inputs['input_ids'],*teacher_inputs['input_ids'] ] 
+    #             model_inputs['teacher_attention_mask'] = [ *teacher_inputs['attention_mask'],*teacher_inputs['attention_mask'] ]
+    #     else:
+    #         inputs = [ex[source_lang] for ex in examples['translation']]
+    #         targets = [ex[target_lang] for ex in examples['translation']]
+    #         inputs = [prefix + inp for inp in inputs]
+    #         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        
+    #     if True:
+    #         pass
+    #     else:
+    #         # Setup the tokenizer for targets
+    #         with tokenizer.as_target_tokenizer():
+    #             labels = tokenizer(targets, max_length=max_target_length, padding=padding, truncation=True)
+
+    #         # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+    #         # padding in the loss.
+    #         if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+    #             labels["input_ids"] = [
+    #                 [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+    #             ]
+
+    #         model_inputs["labels"] = labels["input_ids"]
+    #     return model_inputs
+
+    # source_attr = "caption_zh"
     source_attr = "caption"
     target_attr = "caption"
-    learn_eng=False
-    def preprocess_function(examples,mode='train'):
-        # source language -> tokenizer 
-        # target language -> preprocess
-        
-        if True:
-            inputs = [ex for ex in examples[source_attr]]
-            targets = [ex for ex in examples[target_attr]]
-            model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+    def preprocess_function(examples):
 
-            if learn_eng and mode=='train':
-                eng_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True) 
-                for (k,v),(k1,v1) in zip(model_inputs.items(),eng_inputs.items()):
-                    model_inputs[k1] = [*v,*v1]
-
-            teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
-            model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
-            model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
-
-            if learn_eng and mode=='train':
-                model_inputs['teacher_input_ids'] = [ *teacher_inputs['input_ids'],*teacher_inputs['input_ids'] ] 
-                model_inputs['teacher_attention_mask'] = [ *teacher_inputs['attention_mask'],*teacher_inputs['attention_mask'] ]
-        else:
-            inputs = [ex[source_lang] for ex in examples['translation']]
-            targets = [ex[target_lang] for ex in examples['translation']]
-            inputs = [prefix + inp for inp in inputs]
-            model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-        
-        if True:
-            pass
-        else:
-            # Setup the tokenizer for targets
-            with tokenizer.as_target_tokenizer():
-                labels = tokenizer(targets, max_length=max_target_length, padding=padding, truncation=True)
-
-            # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
-            # padding in the loss.
-            if padding == "max_length" and data_args.ignore_pad_token_for_loss:
-                labels["input_ids"] = [
-                    [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
-                ]
-
-            model_inputs["labels"] = labels["input_ids"]
+        inputs = [ex for ex in examples[source_attr]]
+        targets = [ex for ex in examples[target_attr]]
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
+        model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
+        model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
 
     if training_args.do_train:
@@ -544,7 +555,7 @@ def main():
             train_dataset = train_dataset.select(range(max_train_samples))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
-                lambda x:preprocess_function(x,mode='train'),
+                preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -562,7 +573,7 @@ def main():
             eval_dataset = eval_dataset.select(range(max_eval_samples))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
-                lambda x:preprocess_function(x,mode='eval'),
+                preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -734,6 +745,7 @@ def main():
         kd_model = trainer.model
         chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
         chinese_clip_config.text_config = kd_model.student_config
+        from models.modeling_chclip import ChineseCLIP
         chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
         chinese_clip.text_model = kd_model.student
         chinese_clip.save_pretrained(training_args.output_dir)

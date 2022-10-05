@@ -1,8 +1,10 @@
-from transformers import PreTrainedModel,CLIPTextModel
+from transformers import PreTrainedModel,CLIPTextModel,CLIPVisionModel
 from transformers.models.clip.modeling_clip import contrastive_loss
+import datasets
 import torch 
 from typing import Optional,List
 import torch.nn as nn
+
 from .config_dict import STUDENT_CONFIG_DICT,STUDENT_MODEL_DICT
 import torch.distributed as dist
     
@@ -28,14 +30,14 @@ class AllGather(torch.autograd.Function):
             None,
             None
         )
-
-
 allgather = AllGather.apply
+
 class KDmodel(PreTrainedModel):
     def __init__(self,config,):
         super().__init__(config,)
         # init student and teacher
         self.teacher = CLIPTextModel.from_pretrained(config.teacher_model)
+        # self.vision_encoder = CLIPVisionModel.from_pretrained(config.teacher_model)
         student_config = STUDENT_CONFIG_DICT[config.student_model].from_pretrained(config.student_model)
         student_config.project_dim = self.teacher.config.hidden_size
         student_config.pooler_fn = config.pooler_fn
@@ -49,8 +51,8 @@ class KDmodel(PreTrainedModel):
         self.teacher_config = self.teacher.config
         self.loss_fn =config.loss_fn
         self.kd_type =config.kd_type
-        self.contrast_loss = True
-        self.logit_scale_init_value = 2.6592
+        
+        self.logit_scale_init_value = 1.5
         # up to rob space
         if self.loss_fn == 'cl':
             self.logit_scale = nn.Parameter(torch.ones([]) * self.logit_scale_init_value)
@@ -75,6 +77,7 @@ class KDmodel(PreTrainedModel):
     def freeze(self):
         for _,m in self.teacher.named_parameters():
             m.requires_grad_(False)
+        # # freeze the word embeddings in student model
         # for n,m in self.student.named_parameters():
         #     if 'embeddings.word_embeddings.weight' in n:
         #         print(n)
@@ -152,6 +155,8 @@ class KDmodel(PreTrainedModel):
             loss_fn = torch.nn.CosineEmbeddingLoss()
             # partial for reduce redundant parameter 
             loss_fn = partial(loss_fn,target=torch.tensor([1.],device='cuda' if torch.cuda.is_available() else 'cpu'))
+            teacher_embeds = teacher_embeds / teacher_embeds.norm(p=2, dim=-1, keepdim=True)
+            student_embeds = student_embeds / student_embeds.norm(p=2, dim=-1, keepdim=True)
             loss = loss_fn(student_embeds,teacher_embeds)
         
         return {
