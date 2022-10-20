@@ -4,38 +4,38 @@ sleep 2s
 export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=sock5://127.0.0.1:7891
 
 # exp
-lr=5e-5
+lr=1e-3
 wd=1e-1
-ep=30
+ep=10
 seed=42
 loss_fn=mse
 pooler_fn=cls
 layer_kd=false
 task=multi-clip
-student=xlm-roberta-large
+student=bert-base-uncased
 # student=hfl/chinese-roberta-wwm-ext
-teacher=openai/clip-vit-large-patch14
+teacher=openai/clip-vit-base-patch16
+# teacher=openai/clip-vit-large-patch14
 # teacher=openai/clip-vit-base-patch32
 alpha=.1
 # dst=/sharefs/czz/datasets/mt/merge_cc3m_tsl2019
 dst=/sharefs/czz/datasets/laion28m
-bs=256
+bs=512
 # dst=/home/chenzhongzhi/czz/datasets/multi-clip/cc100k-zh 
 gpus=4
 
 
 warmup_steps=0.1
 kd_type=prekd_word
-run_name=xlm_large_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_cls_3m
+run_name=bert_base${gpus}_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_cls_28m_vbase16
 
-WANDB_PROJECT=clip-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m torch.distributed.launch \
+WANDB_PROJECT=clip-kd HF_DATASETS_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -m torch.distributed.launch \
     --nproc_per_node $gpus /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
     --model_name_or_path ${student} \
     --do_train \
     --do_eval \
     --warmup_ratio ${warmup_steps} \
     --lr_scheduler_type cosine \
-    --max_train_samples 3000000 \
     --source_lang zh \
     --target_lang en \
     --max_source_length 40 \

@@ -4,6 +4,7 @@ STUDENT_CONFIG_DICT={
     'hfl/chinese-roberta-wwm-ext-large':BertSeriesConfig,
     'xlm-roberta-large':RobertaSeriesConfig,
     'xlm-roberta-base':RobertaSeriesConfig,
+    'bert-base-uncased':BertSeriesConfig,
     'bert':BertSeriesConfig,
     'xlm-roberta':RobertaSeriesConfig,
     'clip_text_model':BertSeriesConfig,

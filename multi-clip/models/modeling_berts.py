@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch
 from transformers.models.xlm_roberta.configuration_xlm_roberta import XLMRobertaConfig
 from transformers import XLMRobertaModel
+from transformers.activations import ACT2FN
 from typing import Optional
 
 
@@ -42,19 +43,18 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
         self.pre_LN=nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         # self.activation = nn.Tanh()
         
+        # self.merge_head = BertPredictionHeadTransform(config,config.project_dim)
         # self.post_LN=nn.LayerNorm(config.project_dim, eps=config.layer_norm_eps)
-        self.post_LN=None
 
-        self.pooler = config.pooler_fn
-        if self.pooler == 'average':
-            self.pooler = lambda x: x.mean(-2)
-        elif self.pooler == 'cls':
-            self.pooler = lambda x: x[:,0]
-        elif self.pooler == 'eos':
-            pass
+        self.pooler = lambda x: x[:,0]
 
 
         self.post_init()
+        
+    def get_text_embeds(self,bert_embeds,clip_embeds):
+        return self.merge_head(torch.cat((bert_embeds,clip_embeds)))
+
+        
 
     def forward(
         self,
@@ -95,30 +95,28 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
         
 
         # project every module
-        if self.pre_LN is not None:
-            sequence_output = self.pre_LN(sequence_output)
+        sequence_output = self.pre_LN(sequence_output)
             
         # pooler
         pooler_output = self.pooler(sequence_output)
         pooler_output = self.transformation(pooler_output)
+        projection_state = self.transformation(outputs.last_hidden_state)
         
-        if self.learn_encoder:
-            tfm_outputs = self.encoder_tfm(sequence_output)
-            # pooler_output = self.activation(pooler_output)
-        else:
-            tfm_outputs = None
-
-        if self.post_LN is not None:
-            pooler_output = self.post_LN(pooler_output)
-
         return {
             'pooler_output':pooler_output,
+            'last_hidden_state':outputs.last_hidden_state,
             'hidden_states':outputs.hidden_states,
             'attentions':outputs.attentions,
-            'mimic_states':tfm_outputs
+            'projection_state':projection_state
         }
 
 
 class RobertaSeriesModelWithTransformation(BertSeriesModelWithTransformation):
     base_model_prefix = 'roberta'
     config_class= RobertaSeriesConfig
+
+
+if __name__=='__main__':
+    config = RobertaSeriesConfig.from_pretrained('xlm-roberta-base')
+    print(config.model_type)
+    RobertaSeriesModelWithTransformation.from_pretrained("xlm-roberta-base",config=config)

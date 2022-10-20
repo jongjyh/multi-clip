@@ -25,6 +25,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+from transformers.models.xlm_roberta.tokenization_xlm_roberta import XLMRobertaTokenizer
+from models.modeling_clip import OurCLIPTextModel
+from models.modeling_berts import RobertaSeriesConfig
+from trainer import OurTrainer
 import numpy as np
 from datasets import load_dataset, load_metric
 
@@ -33,6 +37,7 @@ from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
+    CLIPModel,
     DataCollatorForSeq2Seq,
     HfArgumentParser,
     M2M100Tokenizer,
@@ -51,12 +56,11 @@ from transformers.utils.versions import require_version
 
 from transformers import (
     CLIPProcessor,
+    CLIPFeatureExtractor
 )
-from models.modeling_chclip import ChCLIPConfig,CHCLIPProcess
-from models.modeling_kd import KDmodel
+from models.modeling_chclip import CHCLIPProcess,ChCLIPConfig, DoubleCLIPWithKD
 import torch.nn as nn
 import torch
-# from utils.prekd_adapter import adding_adapter_layer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.18.0")
@@ -138,7 +142,7 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     preprocessing_num_workers: Optional[int] = field(
-        default=16,
+        default=8,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     max_source_length: Optional[int] = field(
@@ -252,6 +256,29 @@ class KDArguments:
     prekd_ckpt: str = field(default=None, metadata={"help": "to be continued."})
     delta: str = field(default=None, metadata={"help": "to be continued."})
 
+def get_pretrained_model(kd_config):
+    
+    teacher_model = OurCLIPTextModel.from_pretrained(kd_config.teacher_model)
+    config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
+    config.text_config = RobertaSeriesConfig.from_pretrained(kd_config.student_model,
+                                                             project_dim=teacher_model.config.hidden_size
+                                                             ) 
+    config.text_model_name = kd_config.student_model 
+    config.vision_model_name = kd_config.teacher_model
+    
+    model = DoubleCLIPWithKD(config)
+    model.set_clip_model(teacher_model.text_model)
+    
+    # tokenizer and feature_exactor
+    tokenizer:XLMRobertaTokenizer = AutoTokenizer.from_pretrained(kd_config.student_model)
+    
+    feature_extractor = CLIPFeatureExtractor.from_pretrained(kd_config.teacher_model)
+    teacher_tokenizer = AutoTokenizer.from_pretrained(kd_config.teacher_model)
+
+    processor = CHCLIPProcess(feature_extractor,tokenizer)
+    return (model,teacher_model.text_model,processor,teacher_tokenizer)
+    
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -361,15 +388,6 @@ def main():
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    if True:
-        pass
-    else:
-        config = AutoConfig.from_pretrained(
-            model_args.config_name if model_args.config_name else model_args.model_name_or_path,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -378,69 +396,20 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
     
-    if True:
-        from transformers import PretrainedConfig
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-        processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
-        mix_processor = CHCLIPProcess(feature_extractor=processor.feature_extractor,tokenizer=tokenizer)
-        kd_config_dict = {
-            "teacher_model":kd_args.teacher_model,
-            "student_model":model_args.model_name_or_path,
-            "loss_fn":kd_args.loss_fn,
-            "pooler_fn":kd_args.pooler_fn,
-            "layer_kd":kd_args.layer_kd,
-            "alpha":kd_args.alpha,
-            "learn_encoder":False,
-            "kd_type":kd_args.kd_type,
-        }
-        kd_config = PretrainedConfig(**kd_config_dict)
-        if kd_args.kd_type == 'kd':
-        # for origin kd
-            model = KDmodel(kd_config) 
-        elif kd_args.kd_type == 'postkd':
-        # for post KD
-            model = KDmodel(kd_config) 
-            from models.modeling_chclip import ChineseCLIP
-            pre_clip = ChineseCLIP.from_pretrained(kd_args.prekd_ckpt)
-            model.student = pre_clip.text_model
-            model.student_config = model.student.config
-        elif 'prekd' in kd_args.kd_type :
-        # for pre kd
-            model = KDmodel(kd_config)
-            # use adapter
-            if kd_args.delta == 'adapter' :
-                adding_adapter_layer(model.student,model.student.config.project_dim)
+    from transformers import PretrainedConfig
+    kd_config_dict = {
+        "teacher_model":kd_args.teacher_model,
+        "student_model":model_args.model_name_or_path,
+        "loss_fn":kd_args.loss_fn,
+        "pooler_fn":kd_args.pooler_fn,
+        "layer_kd":kd_args.layer_kd,
+        "alpha":kd_args.alpha,
+        "learn_encoder":False,
+        "kd_type":kd_args.kd_type,
+    }
+    kd_config = PretrainedConfig(**kd_config_dict)
+    model,teacher_model,processor,tokenizer = get_pretrained_model(kd_config)
             
-        # # some exp setting will be excuted here
-        
-        # en_word_embedding_zero_shifting(model.student,mix_processor.tokenizer,eps=1e-2)
-        # en_word_embedding_zero_norm(model.student,mix_processor.tokenizer)
-        # zh_en_word_embedding_shift(model.student,mix_processor.tokenizer)
-
-    else:
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
-
-        model.resize_token_embeddings(len(tokenizer))
-
-        # Set decoder_start_token_id
-        if model.config.decoder_start_token_id is None and isinstance(tokenizer, (MBartTokenizer, MBartTokenizerFast)):
-            if isinstance(tokenizer, MBartTokenizer):
-                model.config.decoder_start_token_id = tokenizer.lang_code_to_id[data_args.target_lang]
-            else:
-                model.config.decoder_start_token_id = tokenizer.convert_tokens_to_ids(data_args.target_lang)
-
-        if model.config.decoder_start_token_id is None:
-            raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
-
-        prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
-
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
     if training_args.do_train:
@@ -471,9 +440,6 @@ def main():
         )
         model.config.forced_bos_token_id = forced_bos_token_id
 
-    # Get the language codes for input/target.
-    source_lang = data_args.source_lang.split("_")[0]
-    target_lang = data_args.target_lang.split("_")[0]
 
     # Temporarily set max_target_length for training.
     max_target_length = data_args.max_target_length
@@ -486,7 +452,6 @@ def main():
         )
         
     source_attr = "caption_zh"
-    # # source_attr = "caption"
     target_attr = "caption"
     def preprocess_function_train(examples):
         inputs = [ex for ex in examples[source_attr]]
@@ -504,15 +469,14 @@ def main():
 
         return model_inputs
 
-    # source_attr = "caption_zh"
-    # source_attr = "caption"
-    # target_attr = "caption"
+    source_attr = "caption_zh"
+    target_attr = "caption"
     def preprocess_function(examples):
 
         inputs = [ex for ex in examples[source_attr]]
         targets = [ex for ex in examples[target_attr]]
-        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-        teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
+        model_inputs = processor.tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        teacher_inputs = tokenizer(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
         model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
         model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
@@ -526,11 +490,11 @@ def main():
             train_dataset = train_dataset.select(range(max_train_samples))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
-                preprocess_function_train,
+                preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
-                load_from_cache_file=not data_args.overwrite_cache,
+                load_from_cache_file=True,
                 desc="Running tokenizer on train dataset",
             )
 
@@ -544,7 +508,7 @@ def main():
             eval_dataset = eval_dataset.select(range(max_eval_samples))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
-                preprocess_function_train,
+                preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -582,63 +546,38 @@ def main():
             pad_to_multiple_of=8 if training_args.fp16 else None,
         )
 
-    # Metric
-    # metric = load_metric("sacrebleu")
-
-    # def postprocess_text(preds, labels):
-    #     preds = [pred.strip() for pred in preds]
-    #     labels = [[label.strip()] for label in labels]
-
-    #     return preds, labels
-
-    # def compute_metrics(eval_preds):
-    #     preds, labels = eval_preds
-    #     if isinstance(preds, tuple):
-    #         preds = preds[0]
-    #     decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-    #     if data_args.ignore_pad_token_for_loss:
-    #         # Replace -100 in the labels as we can't decode them.
-    #         labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-    #     decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-    #     # Some simple post-processing
-    #     decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-
-    #     result = metric.compute(predictions=decoded_preds, references=decoded_labels)
-    #     result = {"bleu": result["score"]}
-
-    #     prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-    #     result["gen_len"] = np.mean(prediction_lens)
-    #     result = {k: round(v, 4) for k, v in result.items()}
-    #     return result
-
     def compute_metrics(eval_preds):
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sklearn.metrics import mean_squared_error
         preds, _ = eval_preds
         if isinstance(preds, tuple):
-            x,y = preds[0],preds[1]
+            clip_outputs,direct_outputs,merge_outputs,teacher_outputs = preds
         
-        # convert to tensor 
-        x,y = torch.from_numpy(x),torch.from_numpy(y)
+        cossim_loss_fn = torch.nn.CosineEmbeddingLoss()
+        cossim_loss = cossim_loss_fn(torch.from_numpy(direct_outputs),torch.from_numpy(teacher_outputs),torch.Tensor([1.])).item()
 
-        cosine_sim = nn.CosineEmbeddingLoss()
-        mse = nn.MSELoss()
-        l1 = nn.L1Loss()
-        assert len(x) == len(y)
-        cos_loss = cosine_sim(x,y,torch.Tensor([1.])).item()
-        mse_loss = mse(x,y).item()
-        l1_loss = l1(x,y).item()
+        di_cos_loss = np.diag(cosine_similarity(direct_outputs,teacher_outputs)).mean()
+        di_mse_loss = mean_squared_error(teacher_outputs,direct_outputs)
+        mg_cos_loss = np.diag(cosine_similarity(merge_outputs,teacher_outputs)).mean()
+        mg_mse_loss = mean_squared_error(teacher_outputs,merge_outputs)
+        cp_cos_loss = np.diag(cosine_similarity(clip_outputs,teacher_outputs)).mean()
+        cp_mse_loss = mean_squared_error(teacher_outputs,clip_outputs)
         
         result = {
-            "cossim_loss":cos_loss,
-            "mse":mse_loss,
-            "l1_loss":l1_loss,
+            "di_cossim":di_cos_loss,
+            "di_mse":        di_mse_loss,
+            "mg_cossim":mg_cos_loss,
+            "mg_mse":        mg_mse_loss,
+            "cp_cossim":cp_cos_loss,
+            "cp_mse":        cp_mse_loss,
+            "di_loss":cossim_loss
         }
 
         result = {k: round(v, 4) for k, v in result.items()}
         return result
 
     # Initialize our Trainer
-    trainer = Seq2SeqTrainer(
+    trainer = OurTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -647,6 +586,7 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics ,
     )
+    trainer.teacher = teacher_model
 
     # Training
     if training_args.do_train:
@@ -679,7 +619,7 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
 
-        metrics = trainer.evaluate(max_length=max_length, num_beams=num_beams, metric_key_prefix="eval")
+        metrics = trainer.evaluate()
         max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
         metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
 
@@ -711,16 +651,16 @@ def main():
                 with open(output_prediction_file, "w", encoding="utf-8") as writer:
                     writer.write("\n".join(predictions))
 
-    # save as clip model
-    if training_args.local_rank==0 or training_args.local_rank == -1 :
-        kd_model = trainer.model
-        chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
-        chinese_clip_config.text_config = kd_model.student_config
-        from models.modeling_chclip import ChineseCLIP
-        chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
-        chinese_clip.text_model = kd_model.student
-        chinese_clip.save_pretrained(training_args.output_dir)
-        mix_processor.save_pretrained(training_args.output_dir)
+    # # save as clip model
+    # if training_args.local_rank==0 or training_args.local_rank == -1 :
+    #     kd_model = trainer.model
+    #     chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
+    #     chinese_clip_config.text_config = kd_model.student_config
+    #     from models.modeling_chclip import ChineseCLIP
+    #     chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
+    #     chinese_clip.text_model = kd_model.student
+    #     chinese_clip.save_pretrained(training_args.output_dir)
+    #     mix_processor.save_pretrained(training_args.output_dir)
 
 
 
