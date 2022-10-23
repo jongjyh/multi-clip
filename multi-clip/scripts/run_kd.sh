@@ -1,8 +1,3 @@
-# ladder
-/sharefs/czz/clash/clash-linux-amd64-v1.11.4 -d /sharefs/czz/clash  &>/dev/null & 
-sleep 1s
-export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=sock5://127.0.0.1:7891
-
 # exp
 lr=1e-4
 wd=1e-1
@@ -12,8 +7,7 @@ loss_fn=mse
 pooler_fn=cls
 layer_kd=false
 task=multi-clip
-student=xlm-roberta-large
-# student=hfl/chinese-roberta-wwm-ext
+student=hfl/chinese-roberta-wwm-ext-large
 teacher=openai/clip-vit-large-patch14
 # teacher=openai/clip-vit-base-patch16
 alpha=.1
@@ -21,15 +15,15 @@ alpha=.1
 dst=/sharefs/czz/datasets/multi-clip/cc3m-zh
 # dst=/sharefs/czz/datasets/laion28m
 bs=256
-gpus=4
+gpus=8
 warmup_steps=1000
 kd_type=kd
 # run_name is also output path
-run_name=xlm_base_${gpus}_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_enandzh_cc3m
+run_name=rob_large_${gpus}_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_enandzh_cc3m
 
 
 # WANDB_PROJECT=clip-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
-WANDB_PROJECT=bilingual-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m torch.distributed.launch \
+WANDB_MODE=offline WANDB_PROJECT=bilingual-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -m torch.distributed.launch \
     --nproc_per_node $gpus /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
     --model_name_or_path ${student} \
     --do_train \

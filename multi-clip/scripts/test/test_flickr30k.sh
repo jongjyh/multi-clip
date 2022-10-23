@@ -20,9 +20,10 @@ model=bs-bs-3m
 # model=xlm768-zh-cls
 # model=brivl
 # model=kd_3e-4
-for model in xlm1024--enandzh-cls
+for model in xlm768-la28-enandzh-cls
 do
     path=/sharefs/czz/save_ckpt/${model}
+    
 
     if [ $model != 'brivl' ];then
         bash src/eval/feature_ext.sh $path $dataset $split

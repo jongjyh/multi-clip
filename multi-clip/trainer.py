@@ -33,21 +33,23 @@ class OurTrainer(Trainer):
         else:
             labels = None
         teacher_outputs = self.teacher(input_ids=inputs.pop('teacher_input_ids'),
-                     attention_mask=inputs.pop('teacher_attention_mask'))[1]
+                     attention_mask=inputs.pop('teacher_attention_mask')).pooler_output
         
         outputs = model(**inputs)
         loss_fn = torch.nn.MSELoss()
-        direct_loss = loss_fn(outputs['direct_outputs'],teacher_outputs) 
+        # direct_loss = loss_fn(outputs['direct_outputs'],teacher_outputs) 
         invert_loss = loss_fn(outputs['clip_outputs'],teacher_outputs)
-        merge_loss = loss_fn(outputs['merge_outputs'],teacher_outputs)
+        # merge_loss = loss_fn(outputs['merge_outputs'],teacher_outputs)
         
-        self.di_loss += direct_loss.detach()
+        # self.di_loss += direct_loss.detach()
         self.iv_loss += invert_loss.detach()
-        self.mg_loss += merge_loss.detach()
+        # self.mg_loss += merge_loss.detach()
 
         outputs['teacher_outputs']=teacher_outputs
         # outputs['loss'] = direct_loss + invert_loss + merge_loss 
-        outputs['loss'] = direct_loss 
+        # outputs['loss'] = merge_loss 
+        outputs['loss'] = invert_loss 
+        # outputs['loss'] = direct_loss 
         
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
@@ -79,19 +81,19 @@ class OurTrainer(Trainer):
 
             # all_gather + mean() to get average loss over all processes
             tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
-            di_loss_scalar = self._nested_gather(self.di_loss).mean().item()
+            # di_loss_scalar = self._nested_gather(self.di_loss).mean().item()
             iv_loss_scalar = self._nested_gather(self.iv_loss).mean().item()
-            mg_loss_scalar = self._nested_gather(self.mg_loss).mean().item()
+            # mg_loss_scalar = self._nested_gather(self.mg_loss).mean().item()
 
             # reset tr_loss to zero
             tr_loss -= tr_loss
-            self.di_loss -= self.di_loss
+            # self.di_loss -= self.di_loss
             self.iv_loss -= self.iv_loss       
-            self.mg_loss -= self.mg_loss
+            # self.mg_loss -= self.mg_loss
 
-            logs["direct_loss"] = round(di_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            # logs["direct_loss"] = round(di_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             logs["invert_loss"] = round(iv_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
-            logs["merge_loss"] =  round(mg_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            # logs["merge_loss"] =  round(mg_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             logs["learning_rate"] = self._get_learning_rate()
 

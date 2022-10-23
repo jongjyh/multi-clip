@@ -7,6 +7,7 @@ from transformers import CLIPProcessor
 from transformers.models.roberta.modeling_roberta import RobertaLayer,BaseModelOutputWithPastAndCrossAttentions
 from transformers.models.clip.modeling_clip import CLIPOutput,_expand_mask
 from transformers.models.xlm_roberta.tokenization_xlm_roberta import XLMRobertaTokenizer
+from .modeling_clip import OurCLIPModel
 from .config_dict import STUDENT_MODEL_DICT,STUDENT_CONFIG_DICT
 
 @dataclass
@@ -19,9 +20,6 @@ class OursCLIPOutput(CLIPOutput):
             self[k] if k not in ["text_model_output", "vision_model_output"] else getattr(self, k).to_tuple()
             for k in self.keys()
         )
-
-
-    
 
 class ChCLIPConfig(CLIPConfig):
     def __init__(self, text_model_name=None,vision_model_name=None,text_config_dict=None, vision_config_dict=None, projection_dim=512, logit_scale_init_value=2.6592, num_layers=3,**kwargs):
@@ -439,7 +437,6 @@ class RobertaLayerStack(nn.Module):
             attentions=all_self_attentions,
             cross_attentions=all_cross_attentions,
         )
-
         
 # copy from bert.
 class BertPredictionHeadTransform(nn.Module):
@@ -461,7 +458,7 @@ class BertPredictionHeadTransform(nn.Module):
 class DoubleCLIP(CLIPPreTrainedModel):
     config_class = ChCLIPConfig
 
-    def __init__(self, config: ChCLIPConfig):
+    def __init__(self, config: ChCLIPConfig,baseline=False):
         super().__init__(config)
 
         if not isinstance(config.vision_config, CLIPVisionConfig):
@@ -471,6 +468,9 @@ class DoubleCLIP(CLIPPreTrainedModel):
             )
 
         text_config = config.text_config
+
+        text_config.hidden_dropout_prob = 0.
+        text_config.attention_probs_dropout_prob=0. 
         vision_config = config.vision_config
 
         self.projection_dim = config.projection_dim
@@ -478,29 +478,34 @@ class DoubleCLIP(CLIPPreTrainedModel):
         self.vision_embed_dim = vision_config.hidden_size
 
         self.text_model = STUDENT_MODEL_DICT[config.text_model_name].from_pretrained(config.text_model_name,config=text_config)
-        self.vision_model = CLIPVisionModel.from_pretrained(config.vision_model_name,config=vision_config)
+        clip_model = OurCLIPModel.from_pretrained(config.vision_model_name)
+
+        self.vision_model = clip_model.vision_model
+        self.clip_model = clip_model.text_model
         
         # inverse module and clip.
         self.inverse_tfm = RobertaLayerStack(text_config,text_config.project_dim,config.num_layers)
         self.merge_head = BertPredictionHeadTransform(config.text_config,config.text_config.project_dim)
-        self.clip_model = None
 
         self.visual_projection = nn.Linear(self.vision_embed_dim, self.projection_dim, bias=False)
         self.text_projection = nn.Linear(self.text_embed_dim, self.projection_dim, bias=False)
         self.logit_scale = nn.Parameter(torch.ones([]) * self.config.logit_scale_init_value)
+        
+        self.baseline = baseline
+        self.freeze_clip()
+        if self.baseline == True:
+            for p in self.inverse_tfm.parameters():
+                p.requires_grad_(False)
+            for p in self.merge_head.parameters():
+                p.requires_grad_(False)
+            
 
         # Initialize weights and apply final processing
-        self.post_init()
 
-    def set_clip_model(self,clip_model):
-        if clip_model is None:
-            return 
-        assert isinstance(clip_model,CLIPTextTransformer)
-        # freeze CLIP.
-        for _,params in clip_model.named_parameters():
+    def freeze_clip(self):
+        assert isinstance(self.clip_model,CLIPTextTransformer)
+        for _,params in self.clip_model.named_parameters():
             params.requires_grad_(False)
-        # only encoder can pass the inputs embeds.
-        self.clip_model = clip_model
         
         
     def get_clip_features(
@@ -706,31 +711,38 @@ class DoubleCLIP(CLIPPreTrainedModel):
             return_dict=return_dict,
         )
 
-        inputs_clip = self.inverse_tfm(
-            hidden_states=text_outputs['projection_state'],
-            attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
+        if self.baseline:
+           text_projection = text_outputs['projection_state'].detach() 
+        else:
+           text_projection = text_outputs['projection_state']
+        # extend attention mask to [ batch_size ,seq_len ,seq_len ]
+        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, text_outputs['projection_state'].size()[:-1])
+        
+        
+        use_inter_encoder = True
+        if use_inter_encoder:
+            inputs_clip = self.inverse_tfm(
+                hidden_states=text_projection,
+                attention_mask=extended_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )[0]
+        else:
+            inputs_clip = text_projection
         
         clip_outputs = self.clip_model(
-            input_embeds=inputs_clip,
+            inputs_embeds=inputs_clip,
             attention_mask=attention_mask,
-            position_ids=position_ids,
-            token_type_ids=token_type_ids,
-            output_attentions=False,
-            output_hidden_states=False,
-            return_dict=return_dict,
-        )
-        direct_outputs = text_outputs['pooler_output']
-        merge_outputs = self.merge_head(torch.cat((direct_outputs,clip_outputs),-1))
+            input_ids_=input_ids,
+        )[1]
+        # direct_outputs = text_outputs['pooler_output']
+        # merge_outputs = self.merge_head(torch.cat((direct_outputs,clip_outputs),-1))
        
-
         image_embeds = vision_outputs[1]
         image_embeds = self.visual_projection(image_embeds)
 
-        text_embeds = merge_outputs
+        text_embeds = clip_outputs
         text_embeds = self.text_projection(text_embeds)
 
         # normalized features
@@ -759,9 +771,9 @@ class DoubleCLIP(CLIPPreTrainedModel):
             text_model_output=text_outputs,
             vision_model_output=vision_outputs,
             # three type of outputs
-            clip_outputs=clip_outputs,
-            merge_outputs=merge_outputs,
-            direct_outputs=direct_outputs,
+            # clip_outputs=clip_outputs,
+            # merge_outputs=merge_outputs,
+            # direct_outputs=direct_outputs,
         )
 class DoubleCLIPWithKD(DoubleCLIP):
     def forward(self, input_ids: Optional[torch.LongTensor] = None, attention_mask: Optional[torch.Tensor] = None, position_ids: Optional[torch.LongTensor] = None, token_type_ids=None, return_loss: Optional[bool] = None, output_attentions: Optional[bool] = None, output_hidden_states: Optional[bool] = None, return_dict: Optional[bool] = None) -> Union[Tuple, CLIPOutput]:
@@ -782,15 +794,24 @@ class DoubleCLIPWithKD(DoubleCLIP):
             return_dict=return_dict,
         )
         
+        if self.baseline:
+           text_projection = text_outputs['projection_state'].detach() 
+        else:
+           text_projection = text_outputs['projection_state']
         # extend attention mask to [ batch_size ,seq_len ,seq_len ]
         extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, text_outputs['projection_state'].size()[:-1])
-        inputs_clip = self.inverse_tfm(
-            hidden_states=text_outputs['projection_state'],
-            attention_mask=extended_attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )[0]
+        
+        use_inter_encoder = True
+        if use_inter_encoder:
+            inputs_clip = self.inverse_tfm(
+                hidden_states=text_projection,
+                attention_mask=extended_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )[0]
+        else:
+            inputs_clip = text_projection
         
         clip_outputs = self.clip_model(
             inputs_embeds=inputs_clip,
@@ -798,11 +819,11 @@ class DoubleCLIPWithKD(DoubleCLIP):
             input_ids_=input_ids,
         )[1]
         direct_outputs = text_outputs['pooler_output']
-        merge_outputs = self.merge_head(torch.cat((direct_outputs,clip_outputs),-1))
+        # merge_outputs = self.merge_head(torch.cat((direct_outputs,clip_outputs),-1))
        
         return OursCLIPOutput(
             # three type of outputs
             clip_outputs=clip_outputs,
-            merge_outputs=merge_outputs,
-            direct_outputs=direct_outputs,
+            # merge_outputs=merge_outputs,
+            # direct_outputs=direct_outputs,
         )

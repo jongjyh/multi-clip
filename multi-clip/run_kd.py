@@ -250,33 +250,29 @@ class KDArguments:
     loss_fn: str = field(default=None, metadata={"help": "to be continued."})
     pooler_fn: str = field(default=None, metadata={"help": "to be continued."})
     layer_kd: bool = field(default=False, metadata={"help": "to be continued."})
+    baseline: bool = field(default=False, metadata={"help": "to be continued."})
     teacher_model: str = field(default=None, metadata={"help": "to be continued."})
     alpha: float = field(default=.1, metadata={"help": "to be continued."})
     kd_type: str = field(default='kd', metadata={"help": "to be continued."})
     prekd_ckpt: str = field(default=None, metadata={"help": "to be continued."})
     delta: str = field(default=None, metadata={"help": "to be continued."})
 
-def get_pretrained_model(kd_config):
-    
-    teacher_model = OurCLIPTextModel.from_pretrained(kd_config.teacher_model)
+def get_pretrained_model(kd_config,tokenizer):
     config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
     config.text_config = RobertaSeriesConfig.from_pretrained(kd_config.student_model,
-                                                             project_dim=teacher_model.config.hidden_size
+                                                             project_dim=config.projection_dim
                                                              ) 
     config.text_model_name = kd_config.student_model 
     config.vision_model_name = kd_config.teacher_model
-    
-    model = DoubleCLIPWithKD(config)
-    model.set_clip_model(teacher_model.text_model)
+    model = DoubleCLIPWithKD(config,baseline=kd_config.baseline)
+    teacher_model = model.clip_model
     
     # tokenizer and feature_exactor
-    tokenizer:XLMRobertaTokenizer = AutoTokenizer.from_pretrained(kd_config.student_model)
-    
     feature_extractor = CLIPFeatureExtractor.from_pretrained(kd_config.teacher_model)
     teacher_tokenizer = AutoTokenizer.from_pretrained(kd_config.teacher_model)
 
     processor = CHCLIPProcess(feature_extractor,tokenizer)
-    return (model,teacher_model.text_model,processor,teacher_tokenizer)
+    return (model,teacher_model,processor,teacher_tokenizer)
     
 
 def main():
@@ -406,9 +402,10 @@ def main():
         "alpha":kd_args.alpha,
         "learn_encoder":False,
         "kd_type":kd_args.kd_type,
+        "baseline":kd_args.baseline
     }
     kd_config = PretrainedConfig(**kd_config_dict)
-    model,teacher_model,processor,tokenizer = get_pretrained_model(kd_config)
+    model,teacher_model,processor,teacher_tokenizer = get_pretrained_model(kd_config,tokenizer)
             
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
@@ -476,7 +473,7 @@ def main():
         inputs = [ex for ex in examples[source_attr]]
         targets = [ex for ex in examples[target_attr]]
         model_inputs = processor.tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-        teacher_inputs = tokenizer(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
+        teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
         model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
         model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
@@ -551,26 +548,27 @@ def main():
         from sklearn.metrics import mean_squared_error
         preds, _ = eval_preds
         if isinstance(preds, tuple):
-            clip_outputs,direct_outputs,merge_outputs,teacher_outputs = preds
+            # clip_outputs,direct_outputs,merge_outputs,teacher_outputs = preds
+            clip_outputs,teacher_outputs = preds
         
-        cossim_loss_fn = torch.nn.CosineEmbeddingLoss()
-        cossim_loss = cossim_loss_fn(torch.from_numpy(direct_outputs),torch.from_numpy(teacher_outputs),torch.Tensor([1.])).item()
+        # cossim_loss_fn = torch.nn.CosineEmbeddingLoss()
+        # cossim_loss = cossim_loss_fn(torch.from_numpy(direct_outputs),torch.from_numpy(teacher_outputs),torch.Tensor([1.])).item()
 
-        di_cos_loss = np.diag(cosine_similarity(direct_outputs,teacher_outputs)).mean()
-        di_mse_loss = mean_squared_error(teacher_outputs,direct_outputs)
-        mg_cos_loss = np.diag(cosine_similarity(merge_outputs,teacher_outputs)).mean()
-        mg_mse_loss = mean_squared_error(teacher_outputs,merge_outputs)
+        # di_cos_loss = np.diag(cosine_similarity(direct_outputs,teacher_outputs)).mean()
+        # di_mse_loss = mean_squared_error(teacher_outputs,direct_outputs)
+        # mg_cos_loss = np.diag(cosine_similarity(merge_outputs,teacher_outputs)).mean()
+        # mg_mse_loss = mean_squared_error(teacher_outputs,merge_outputs)
         cp_cos_loss = np.diag(cosine_similarity(clip_outputs,teacher_outputs)).mean()
         cp_mse_loss = mean_squared_error(teacher_outputs,clip_outputs)
         
         result = {
-            "di_cossim":di_cos_loss,
-            "di_mse":        di_mse_loss,
-            "mg_cossim":mg_cos_loss,
-            "mg_mse":        mg_mse_loss,
-            "cp_cossim":cp_cos_loss,
+            # "di_cossim":di_cos_loss,
+            # "di_mse":        di_mse_loss,
+            # "mg_cossim":mg_cos_loss,
+            # "mg_mse":        mg_mse_loss,
+            "cp_cossim":     cp_cos_loss,
             "cp_mse":        cp_mse_loss,
-            "di_loss":cossim_loss
+            # "di_loss":cossim_loss
         }
 
         result = {k: round(v, 4) for k, v in result.items()}
@@ -650,19 +648,6 @@ def main():
                 output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
                 with open(output_prediction_file, "w", encoding="utf-8") as writer:
                     writer.write("\n".join(predictions))
-
-    # # save as clip model
-    # if training_args.local_rank==0 or training_args.local_rank == -1 :
-    #     kd_model = trainer.model
-    #     chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
-    #     chinese_clip_config.text_config = kd_model.student_config
-    #     from models.modeling_chclip import ChineseCLIP
-    #     chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
-    #     chinese_clip.text_model = kd_model.student
-    #     chinese_clip.save_pretrained(training_args.output_dir)
-    #     mix_processor.save_pretrained(training_args.output_dir)
-
-
 
     kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "translation"}
     if data_args.dataset_name is not None:

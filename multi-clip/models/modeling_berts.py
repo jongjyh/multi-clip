@@ -16,7 +16,7 @@ class BertSeriesConfig(BertConfig):
         self.learn_encoder = learn_encoder
 
 class RobertaSeriesConfig(XLMRobertaConfig):
-    def __init__(self, pad_token_id=1, bos_token_id=0, eos_token_id=2,project_dim=512,pooler_fn='mse',learn_encoder=False, **kwargs):
+    def __init__(self, pad_token_id=1, bos_token_id=0, eos_token_id=2,project_dim=512,pooler_fn='cls',learn_encoder=False, **kwargs):
         super().__init__(pad_token_id, bos_token_id, eos_token_id, **kwargs)
         self.project_dim = project_dim
         self.pooler_fn = pooler_fn
@@ -41,19 +41,9 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
         if config.learn_encoder:
             self.encoder_tfm = nn.Linear(config.hidden_size,config.project_dim)
         self.pre_LN=nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        # self.activation = nn.Tanh()
         
-        # self.merge_head = BertPredictionHeadTransform(config,config.project_dim)
-        # self.post_LN=nn.LayerNorm(config.project_dim, eps=config.layer_norm_eps)
-
         self.pooler = lambda x: x[:,0]
-
-
         self.post_init()
-        
-    def get_text_embeds(self,bert_embeds,clip_embeds):
-        return self.merge_head(torch.cat((bert_embeds,clip_embeds)))
-
         
 
     def forward(

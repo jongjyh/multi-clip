@@ -135,3 +135,8 @@ class OurCLIPTextModel(CLIPPreTrainedModel):
             return_dict=return_dict,
         )
 
+class OurCLIPModel(CLIPModel):
+    def __init__(self, config: CLIPConfig):
+        super().__init__(config)
+        text_config = config.text_config
+        self.text_model = OurCLIPTextTransformer(text_config)

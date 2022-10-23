@@ -1,8 +1,5 @@
-# ladder
-source /home/chenzhongzhi/proxy.sh
-
 # exp
-lr=5e-5
+lr=2e-4
 wd=1e-1
 ep=10
 seed=42
@@ -10,23 +7,28 @@ loss_fn=mse
 task=multi-clip
 student=xlm-roberta-base
 teacher=openai/clip-vit-large-patch14
-# dataset path
 dst=/sharefs/czz/datasets/multi-clip/cc3m-zh
 # dst=/sharefs/czz/datasets/laion28m
 bs=256
 warmup_steps=1000
-run_name=double_clip_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_baseline_100k
-# run_name=xlm_base_${gpus}_${loss_fn}_${pooler_fn}_wd${wd}_bs${bs}_lr${lr}_warm${warmup_steps}_ep${ep}_sd${seed}_${kd_type}_enandzh_cc3m
+variant=onlyiv
+run_name=${variant}_cc3m_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}
 debug=0
-baseline=true
+baseline=false
 
-# WANDB_PROJECT=clip-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
-CUDA_VISIBLE_DEVICES=0 WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python \
+# multi gpu setting
+gpus=4
+if [ $gpus -gt 1 ] ;then
+gpus="-m torch.distributed.launch --nproc_per_node $gpus"
+else
+gpus=""
+fi
+
+WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python ${gpus} \
     /home/chenzhongzhi/multi-clip/multi-clip/run_kd.py  \
     --model_name_or_path ${student} \
     --do_train \
     --do_eval \
-    --max_train_samples 100000 \
     --warmup_steps ${warmup_steps} \
     --source_lang zh \
     --target_lang en \
@@ -51,5 +53,4 @@ CUDA_VISIBLE_DEVICES=0 WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORM
     --loss_fn ${loss_fn} \
     --teacher_model ${teacher} \
     --baseline ${baseline} \
-    
     
