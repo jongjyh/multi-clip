@@ -23,14 +23,14 @@ else
 fi
 
 # multi gpu setting
-gpus=4
+gpus=1
 if [ $gpus -gt 1 ] ;then
     gpus="-m torch.distributed.launch --nproc_per_node $gpus"
 else
     gpus=""
 fi
 
-run_name=${variant}_cc3muc2_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_en_zh
+run_name=${variant}_cc3muc2_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_6lgs
 # debug setting
 debug=0
 if [ $debug -eq 1 ] ;then

@@ -441,15 +441,16 @@ def main():
     source_attr = "caption_zh"
     target_attr = "caption"
     # for multilingual dataset
-    languages = ['zh', 'en']
+    # languages = ['zh', 'en']
+    languages = ['zh', 'en','cs','de','fr','ja']
 
     def preprocess_function(examples):
         # uc2 dataset
         if isinstance(examples['caption'][0], list):
             targets = [dicts[0]['en'] for dicts in examples['caption']
-                       for language in dicts[0].keys() if language in languages]
+                       for language,caption in dicts[0].items() if language in languages and caption is not None ]
             inputs = [dicts[0][language] for dicts in examples['caption']
-                      for language in dicts[0].keys() if language in languages]
+                      for language,caption in dicts[0].items() if language in languages and caption is not None ]
         else:
             inputs = [ex for ex in examples[source_attr]]
             targets = [ex for ex in examples[target_attr]]
@@ -469,7 +470,8 @@ def main():
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.train_file.split('/')[-1],
-        languages=languages
+        languages=len(languages) # for 6 languages
+        # languages=languages # for en and zh
     )
     logger.info(
         "if you change the teacher or data please check the fingerprint.")
@@ -499,7 +501,8 @@ def main():
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.validation_file.split('/')[-1],
-        languages=languages
+        languages=len(languages) # for 6 languages
+        # languages=languages # for en and zh
     )
     logger.info(f"now fingerprint for eval:{new_fingerprint}")
     if training_args.do_eval:
