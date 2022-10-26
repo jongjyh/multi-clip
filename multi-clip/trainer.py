@@ -40,7 +40,7 @@ class OurTrainer(Trainer):
             labels = None
         # teacher_outputs = self.teacher(input_ids=inputs.pop('teacher_input_ids'),
         #              attention_mask=inputs.pop('teacher_attention_mask')).pooler_output
-        teacher_outputs = inputs.pop('teacher_features')
+        teacher_outputs = inputs['labels']
         outputs = model(**inputs)
         loss_fn = torch.nn.MSELoss()
         # direct_loss = loss_fn(outputs['direct_outputs'],teacher_outputs) 
@@ -51,7 +51,7 @@ class OurTrainer(Trainer):
         self.iv_loss += invert_loss.detach()
         # self.mg_loss += merge_loss.detach()
 
-        outputs['teacher_outputs']=teacher_outputs
+        # outputs['teacher_outputs']=teacher_outputs
         # outputs['loss'] = direct_loss + invert_loss + merge_loss 
         # outputs['loss'] = merge_loss 
         outputs['loss'] = invert_loss 

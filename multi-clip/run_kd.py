@@ -46,14 +46,15 @@ from transformers.utils.versions import require_version
 from transformers import (
     CLIPFeatureExtractor
 )
-from models.modeling_chclip import CHCLIPProcess,ChCLIPConfig, DoubleCLIPWithKD
+from models.modeling_chclip import CHCLIPProcess, ChCLIPConfig, DoubleCLIPWithKD
 import torch.nn as nn
 import torch
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.18.0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/translation/requirements.txt")
+require_version("datasets>=1.8.0",
+                "To fix: pip install -r examples/pytorch/translation/requirements.txt")
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,8 @@ class ModelArguments:
     """
 
     model_name_or_path: str = field(
-        metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
@@ -77,15 +79,18 @@ class ModelArguments:
     )
     cache_dir: Optional[str] = field(
         default=None,
-        metadata={"help": "Where to store the pretrained models downloaded from huggingface.co"},
+        metadata={
+            "help": "Where to store the pretrained models downloaded from huggingface.co"},
     )
     use_fast_tokenizer: bool = field(
         default=True,
-        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+        metadata={
+            "help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
     )
     model_revision: str = field(
         default="main",
-        metadata={"help": "The specific model version to use (can be a branch name, tag name or commit id)."},
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."},
     )
     use_auth_token: bool = field(
         default=False,
@@ -102,8 +107,10 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
-    source_lang: str = field(default=None, metadata={"help": "Source language id for translation."})
-    target_lang: str = field(default=None, metadata={"help": "Target language id for translation."})
+    source_lang: str = field(default=None, metadata={
+                             "help": "Source language id for translation."})
+    target_lang: str = field(default=None, metadata={
+                             "help": "Target language id for translation."})
 
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
@@ -111,7 +118,8 @@ class DataTrainingArguments:
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
-    train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a jsonlines)."})
+    train_file: Optional[str] = field(
+        default=None, metadata={"help": "The input training data file (a jsonlines)."})
     validation_file: Optional[str] = field(
         default=None,
         metadata={
@@ -211,9 +219,11 @@ class DataTrainingArguments:
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
-            raise ValueError("Need either a dataset name or a training/validation file.")
+            raise ValueError(
+                "Need either a dataset name or a training/validation file.")
         elif self.source_lang is None or self.target_lang is None:
-            raise ValueError("Need to specify the source language and the target language.")
+            raise ValueError(
+                "Need to specify the source language and the target language.")
 
         # accepting both json and jsonl file extensions, as
         # many jsonlines files actually have a .json extension
@@ -228,6 +238,7 @@ class DataTrainingArguments:
         if self.val_max_target_length is None:
             self.val_max_target_length = self.max_target_length
 
+
 @dataclass
 class KDArguments:
     """
@@ -236,44 +247,52 @@ class KDArguments:
 
     loss_fn: str = field(default=None, metadata={"help": "to be continued."})
     pooler_fn: str = field(default=None, metadata={"help": "to be continued."})
-    layer_kd: bool = field(default=False, metadata={"help": "to be continued."})
-    baseline: bool = field(default=False, metadata={"help": "to be continued."})
-    teacher_model: str = field(default=None, metadata={"help": "to be continued."})
+    layer_kd: bool = field(default=False, metadata={
+                           "help": "to be continued."})
+    baseline: bool = field(default=False, metadata={
+                           "help": "to be continued."})
+    teacher_model: str = field(default=None, metadata={
+                               "help": "to be continued."})
     alpha: float = field(default=.1, metadata={"help": "to be continued."})
     kd_type: str = field(default='kd', metadata={"help": "to be continued."})
-    prekd_ckpt: str = field(default=None, metadata={"help": "to be continued."})
+    prekd_ckpt: str = field(default=None, metadata={
+                            "help": "to be continued."})
     delta: str = field(default=None, metadata={"help": "to be continued."})
 
-def get_pretrained_model(kd_config,tokenizer,device):
+
+def get_pretrained_model(kd_config, tokenizer, device):
     config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
     config.text_config = RobertaSeriesConfig.from_pretrained(kd_config.student_model,
                                                              project_dim=config.projection_dim
-                                                             ) 
-    config.text_model_name = kd_config.student_model 
+                                                             )
+    config.text_model_name = kd_config.student_model
     config.vision_model_name = kd_config.teacher_model
-    model = DoubleCLIPWithKD(config,baseline=kd_config.baseline)
+    model = DoubleCLIPWithKD(config, baseline=kd_config.baseline)
     teacher_model = model.clip_model.to(device).eval()
-    
+
     # tokenizer and feature_exactor
-    feature_extractor = CLIPFeatureExtractor.from_pretrained(kd_config.teacher_model)
+    feature_extractor = CLIPFeatureExtractor.from_pretrained(
+        kd_config.teacher_model)
     teacher_tokenizer = AutoTokenizer.from_pretrained(kd_config.teacher_model)
 
-    processor = CHCLIPProcess(feature_extractor,tokenizer)
-    return (model,teacher_model,processor,teacher_tokenizer)
-    
+    processor = CHCLIPProcess(feature_extractor, tokenizer)
+    return (model, teacher_model, processor, teacher_tokenizer)
+
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments,KDArguments))
+    parser = HfArgumentParser(
+        (ModelArguments, DataTrainingArguments, Seq2SeqTrainingArguments, KDArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(
+            json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args,kd_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args, kd_args = parser.parse_args_into_dataclasses()
 
     # Setup logging
     logging.basicConfig(
@@ -337,10 +356,10 @@ def main():
     # download the dataset.
     if data_args.dataset_name is not None and data_args.train_file is None:
         if True:
-            # load from local 
+            # load from local
             raw_datasets = datasets.load_from_disk(data_args.dataset_name)
         else:
-        # Downloading and loading a dataset from the hub.
+            # Downloading and loading a dataset from the hub.
             raw_datasets = load_dataset(
                 data_args.dataset_name,
                 cache_dir=model_args.cache_dir,
@@ -378,22 +397,23 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    
+
     from transformers import PretrainedConfig
     kd_config_dict = {
-        "teacher_model":kd_args.teacher_model,
-        "student_model":model_args.model_name_or_path,
-        "loss_fn":kd_args.loss_fn,
-        "pooler_fn":kd_args.pooler_fn,
-        "layer_kd":kd_args.layer_kd,
-        "alpha":kd_args.alpha,
-        "learn_encoder":False,
-        "kd_type":kd_args.kd_type,
-        "baseline":kd_args.baseline
+        "teacher_model": kd_args.teacher_model,
+        "student_model": model_args.model_name_or_path,
+        "loss_fn": kd_args.loss_fn,
+        "pooler_fn": kd_args.pooler_fn,
+        "layer_kd": kd_args.layer_kd,
+        "alpha": kd_args.alpha,
+        "learn_encoder": False,
+        "kd_type": kd_args.kd_type,
+        "baseline": kd_args.baseline
     }
     kd_config = PretrainedConfig(**kd_config_dict)
-    model,teacher_model,processor,teacher_tokenizer = get_pretrained_model(kd_config,tokenizer,training_args.device)
-            
+    model, teacher_model, processor, teacher_tokenizer = get_pretrained_model(
+        kd_config, tokenizer, training_args.device)
+
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
     if training_args.do_train:
@@ -403,7 +423,8 @@ def main():
     elif training_args.do_predict:
         column_names = raw_datasets["test"].column_names
     else:
-        logger.info("There is nothing to do. Please pass `do_train`, `do_eval` and/or `do_predict`.")
+        logger.info(
+            "There is nothing to do. Please pass `do_train`, `do_eval` and/or `do_predict`.")
         return
 
     # Temporarily set max_target_length for training.
@@ -416,40 +437,51 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
+    # for our dataset
     source_attr = "caption_zh"
     target_attr = "caption"
+    # for multilingual dataset
+    languages = ['zh', 'en']
+
     def preprocess_function(examples):
         # uc2 dataset
-        if isinstance( examples['caption'][0],list):
-            targets = [ dicts[0]['en']  for dicts in examples['caption'] for one_lingual in dicts[0].values() if one_lingual is not None]
-            inputs = [ one_lingual for dicts in examples['caption'] for one_lingual in dicts[0].values() if one_lingual is not None]
+        if isinstance(examples['caption'][0], list):
+            targets = [dicts[0]['en'] for dicts in examples['caption']
+                       for language in dicts[0].keys() if language in languages]
+            inputs = [dicts[0][language] for dicts in examples['caption']
+                      for language in dicts[0].keys() if language in languages]
         else:
             inputs = [ex for ex in examples[source_attr]]
             targets = [ex for ex in examples[target_attr]]
-        model_inputs = processor.tokenizer(inputs, max_length=data_args.max_source_length, padding=padding,truncation=True)
-        teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,padding=True,truncation=True,return_tensors='pt').to(training_args.device)
+        model_inputs = processor.tokenizer(
+            inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,
+                                           padding=True, truncation=True, return_tensors='pt').to(training_args.device)
         with torch.no_grad():
             teacher_features = teacher_model(**teacher_inputs)[1]
-            model_inputs['teacher_features'] = teacher_features
+            # model_inputs['teacher_features'] = teacher_features
+            model_inputs['labels'] = teacher_features
 
-        # model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
+        # model_inputs['teacher_input_ids'] = teacher_inputs['input_ids']
         # model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
-
-    new_fingerprint="{teacher}_{seqlen}_{file}".format(
+    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}".format(
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.train_file.split('/')[-1],
+        languages=languages
     )
-    logger.info("if you change the teacher or data please check the fingerprint.")
+    logger.info(
+        "if you change the teacher or data please check the fingerprint.")
     logger.info(f"now fingerprint for train:{new_fingerprint}")
-    
+
     if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
         if data_args.max_train_samples is not None:
-            max_train_samples = min(len(train_dataset), data_args.max_train_samples)
+            max_train_samples = min(
+                len(train_dataset), data_args.max_train_samples)
             train_dataset = train_dataset.select(range(max_train_samples))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
@@ -463,10 +495,11 @@ def main():
                 new_fingerprint=new_fingerprint
             )
 
-    new_fingerprint="{teacher}_{seqlen}_{file}".format(
+    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}".format(
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.validation_file.split('/')[-1],
+        languages=languages
     )
     logger.info(f"now fingerprint for eval:{new_fingerprint}")
     if training_args.do_eval:
@@ -475,7 +508,8 @@ def main():
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = raw_datasets["validation"]
         if data_args.max_eval_samples is not None:
-            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+            max_eval_samples = min(
+                len(eval_dataset), data_args.max_eval_samples)
             eval_dataset = eval_dataset.select(range(max_eval_samples))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
@@ -495,8 +529,10 @@ def main():
             raise ValueError("--do_predict requires a test dataset")
         predict_dataset = raw_datasets["test"]
         if data_args.max_predict_samples is not None:
-            max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
-            predict_dataset = predict_dataset.select(range(max_predict_samples))
+            max_predict_samples = min(
+                len(predict_dataset), data_args.max_predict_samples)
+            predict_dataset = predict_dataset.select(
+                range(max_predict_samples))
         with training_args.main_process_first(desc="prediction dataset map pre-processing"):
             predict_dataset = predict_dataset.map(
                 preprocess_function,
@@ -508,7 +544,8 @@ def main():
             )
 
     # Data collator
-    label_pad_token_id = -100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
+    label_pad_token_id = - \
+        100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
     if data_args.pad_to_max_length:
         data_collator = default_data_collator
     else:
@@ -517,21 +554,23 @@ def main():
     def compute_metrics(eval_preds):
         from sklearn.metrics.pairwise import cosine_similarity
         from sklearn.metrics import mean_squared_error
-        preds, _ = eval_preds
+        preds, labels = eval_preds
+        clip_outputs, teacher_outputs = preds, labels
         if isinstance(preds, tuple):
+            # print(preds[1])
             # clip_outputs,direct_outputs,merge_outputs,teacher_outputs = preds
-            clip_outputs,teacher_outputs = preds
-        
+            clip_outputs, teacher_outputs = preds
+
         # cossim_loss_fn = torch.nn.CosineEmbeddingLoss()
         # cossim_loss = cossim_loss_fn(torch.from_numpy(direct_outputs),torch.from_numpy(teacher_outputs),torch.Tensor([1.])).item()
-
         # di_cos_loss = np.diag(cosine_similarity(direct_outputs,teacher_outputs)).mean()
         # di_mse_loss = mean_squared_error(teacher_outputs,direct_outputs)
         # mg_cos_loss = np.diag(cosine_similarity(merge_outputs,teacher_outputs)).mean()
         # mg_mse_loss = mean_squared_error(teacher_outputs,merge_outputs)
-        cp_cos_loss = np.diag(cosine_similarity(clip_outputs,teacher_outputs)).mean()
-        cp_mse_loss = mean_squared_error(teacher_outputs,clip_outputs)
-        
+        cp_cos_loss = np.diag(cosine_similarity(
+            clip_outputs, teacher_outputs)).mean()
+        cp_mse_loss = mean_squared_error(teacher_outputs, clip_outputs)
+
         result = {
             # "di_cossim":di_cos_loss,
             # "di_mse":        di_mse_loss,
@@ -569,7 +608,8 @@ def main():
 
         metrics = train_result.metrics
         max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(
+                train_dataset)
         )
         metrics["train_samples"] = min(max_train_samples, len(train_dataset))
 
@@ -583,26 +623,27 @@ def main():
         if trainer.is_world_process_zero():
             logger.info("*** Evaluate ***")
             dataset_attr = (
-                "flickr30k","flickr30k-cn","imagenet1k","imagenet1k_zh"
+                "flickr30k", "flickr30k-cn", "imagenet1k", "imagenet1k_zh"
             )
-            sys.path.append('/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal')
+            sys.path.append(
+                '/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal')
             from CLIP_benchmark_internal.evaluate import evaluate
             dataset_metrics = {}
             for name in dataset_attr:
                 metrics = evaluate(
-                        dataset_name=name,
-                        model_name=training_args.output_dir,
-                        pretrained='pretrained',                    
-                        output=f'/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal/results/myexp/{training_args.run_name}.json',
-                        dataset_root="/sharefs/baai-mmdataset/clip_benchmark_datasets",
-                        recall_k=[1,5,10],
-                        model=model,
-                        processor=processor
+                    dataset_name=name,
+                    model_name=training_args.output_dir,
+                    pretrained='pretrained',
+                    output=f'/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal/results/myexp/{training_args.run_name}.json',
+                    dataset_root="/sharefs/baai-mmdataset/clip_benchmark_datasets",
+                    recall_k=[1, 5, 10],
+                    model=model,
+                    processor=processor
                 )
-                
+
                 trainer.log_metrics("test", metrics)
                 trainer.save_metrics("test", metrics)
-                
+
                 for key in metrics.keys():
                     dataset_metrics[f"{name}/{key}"] = metrics[key]
             trainer.log(dataset_metrics)
@@ -615,9 +656,11 @@ def main():
         )
         metrics = predict_results.metrics
         max_predict_samples = (
-            data_args.max_predict_samples if data_args.max_predict_samples is not None else len(predict_dataset)
+            data_args.max_predict_samples if data_args.max_predict_samples is not None else len(
+                predict_dataset)
         )
-        metrics["predict_samples"] = min(max_predict_samples, len(predict_dataset))
+        metrics["predict_samples"] = min(
+            max_predict_samples, len(predict_dataset))
 
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)
@@ -628,11 +671,13 @@ def main():
                     predict_results.predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
                 )
                 predictions = [pred.strip() for pred in predictions]
-                output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
+                output_prediction_file = os.path.join(
+                    training_args.output_dir, "generated_predictions.txt")
                 with open(output_prediction_file, "w", encoding="utf-8") as writer:
                     writer.write("\n".join(predictions))
 
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "translation"}
+    kwargs = {"finetuned_from": model_args.model_name_or_path,
+              "tasks": "translation"}
     if data_args.dataset_name is not None:
         kwargs["dataset_tags"] = data_args.dataset_name
         if data_args.dataset_config_name is not None:
@@ -641,7 +686,8 @@ def main():
         else:
             kwargs["dataset"] = data_args.dataset_name
 
-    languages = [l for l in [data_args.source_lang, data_args.target_lang] if l is not None]
+    languages = [l for l in [data_args.source_lang,
+                             data_args.target_lang] if l is not None]
     if len(languages) > 0:
         kwargs["language"] = languages
 
@@ -651,6 +697,7 @@ def main():
         trainer.create_model_card(**kwargs)
 
     return results
+
 
 if __name__ == "__main__":
     main()

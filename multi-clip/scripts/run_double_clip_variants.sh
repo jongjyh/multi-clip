@@ -30,13 +30,13 @@ else
     gpus=""
 fi
 
-run_name=${variant}_cc3muc2_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_init
+run_name=${variant}_cc3muc2_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_en_zh
 # debug setting
 debug=0
 if [ $debug -eq 1 ] ;then
-    debug="--max_train_samples 60000"
+    debug="--max_train_samples 1000 --max_eval_samples 1000"
     run_name=${run_name}_debug
-    gpus="-m debugpy --listen 5678"
+    gpus="-m debugpy --listen 5679"
 else
     debug=""
 fi
@@ -61,6 +61,7 @@ WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_
     --save_total_limit 1 \
     --run_name ${run_name} \
     --logging_steps 500 \
+    --save_steps 2000 \
     --output_dir ckpt/${run_name} \
     --dataset_name $dst \
     --per_device_train_batch_size $bs \
