@@ -7,55 +7,46 @@ loss_fn=mse
 task=multi-clip
 student=xlm-roberta-base
 teacher=openai/clip-vit-large-patch14
-bs=180
+dst=/sharefs/czz/datasets/multi-clip/cc3m-zh
+# dst=/sharefs/czz/datasets/laion28m
+bs=256
 warmup_steps=1000
 variant=onlyiv
 baseline=false
 
-# dataset setting
-uc2=1
-if [ $uc2 -eq 0 ] ;then
-    dst="/sharefs/czz/datasets/multi-clip/cc3m-zh"
-else
-    train="/sharefs/baai-mrnd/czz/datasets/cc3m_uc2/train_cc3m.json"
-    eval="/sharefs/baai-mrnd/czz/datasets/cc3m_uc2/eval_cc3m.json"
-    dst="none --train_file ${train} --validation_file ${eval}"
-fi
-
 # multi gpu setting
-gpus=4
+gpus=1
 if [ $gpus -gt 1 ] ;then
-    gpus="-m torch.distributed.launch --nproc_per_node $gpus"
+gpus="-m torch.distributed.launch --nproc_per_node $gpus"
 else
-    gpus=""
+gpus=""
 fi
 
-run_name=${variant}_cc3muc2_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_init
+run_name=${variant}_cc3m_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip
 # debug setting
 debug=0
 if [ $debug -eq 1 ] ;then
-    debug="--max_train_samples 60000"
-    run_name=${run_name}_debug
-    gpus="-m debugpy --listen 5678"
+debug="--max_train_samples 5000"
+run_name=${run_name}_debug
+debug_py="-m debugpy --listen 5678"
 else
-    debug=""
+debug=""
 fi
 
-
-WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python ${gpus} \
+WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python $debug_py ${gpus} \
     /home/chenzhongzhi/multi-clip/multi-clip/run_kd.py  \
-    --model_name_or_path ${student} \
-    --do_train \
+    --model_name_or_path onlyiv_cc3m_xlmBase_p14_bs256_wd1e-1_lr2e-4_ep10_ws1000_doubleclip \
     --do_eval \
     --warmup_steps ${warmup_steps} \
     --source_lang zh \
     --target_lang en \
-    --max_source_length 75 \
+    --max_source_length 40 \
     --num_train_epochs $ep \
     --remove_unused_columns false \
     --weight_decay $wd \
     --learning_rate $lr \
     --seed $seed \
+    --pad_to_max_length true \
     --report_to wandb \
     --evaluation_strategy steps \
     --save_total_limit 1 \
@@ -69,4 +60,5 @@ WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_
     --greater_is_better false \
     --loss_fn ${loss_fn} \
     --teacher_model ${teacher} \
-    --baseline ${baseline} $debug 
+    --baseline ${baseline} \
+    $debug

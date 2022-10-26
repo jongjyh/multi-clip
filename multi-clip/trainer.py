@@ -1,9 +1,11 @@
+from transformers import CLIPProcessor
 from transformers.trainer import *
 class OurTrainer(Trainer):
-    teacher = None
+    # teacher = None
     di_loss = 0.
     iv_loss = 0.
     mg_loss = 0.
+    processor:CLIPProcessor = None
     def log(self, logs: Dict[str, float]) -> None:
         """
         Log `logs` on the various objects watching training.
@@ -20,8 +22,12 @@ class OurTrainer(Trainer):
         output = {**logs, **{"step": self.state.global_step}}
         self.state.log_history.append(output)
         self.control = self.callback_handler.on_log(self.args, self.state, self.control, logs)
+        
+    def _save(self, output_dir: Optional[str] = None, state_dict=None):
+        if self.processor is not None:
+            self.processor.save_pretrained(output_dir)
+        return super()._save(output_dir, state_dict) 
 
-    
     def compute_loss(self, model, inputs, return_outputs=False):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
@@ -32,9 +38,9 @@ class OurTrainer(Trainer):
             labels = inputs.pop("labels")
         else:
             labels = None
-        teacher_outputs = self.teacher(input_ids=inputs.pop('teacher_input_ids'),
-                     attention_mask=inputs.pop('teacher_attention_mask')).pooler_output
-        
+        # teacher_outputs = self.teacher(input_ids=inputs.pop('teacher_input_ids'),
+        #              attention_mask=inputs.pop('teacher_attention_mask')).pooler_output
+        teacher_outputs = inputs.pop('teacher_features')
         outputs = model(**inputs)
         loss_fn = torch.nn.MSELoss()
         # direct_loss = loss_fn(outputs['direct_outputs'],teacher_outputs) 

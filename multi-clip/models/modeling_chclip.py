@@ -3,7 +3,7 @@ from .modeling_clip import OurCLIPTextTransformer
 import torch.nn as nn
 import torch
 import copy
-from transformers import CLIPProcessor
+from transformers import BertTokenizer, CLIPProcessor
 from transformers.models.roberta.modeling_roberta import RobertaLayer,BaseModelOutputWithPastAndCrossAttentions
 from transformers.models.clip.modeling_clip import CLIPOutput,_expand_mask
 from transformers.models.xlm_roberta.tokenization_xlm_roberta import XLMRobertaTokenizer
@@ -33,13 +33,14 @@ class ChCLIPConfig(CLIPConfig):
         self.vision_model_name = vision_model_name
     
 class CHCLIPProcess(CLIPProcessor):
-    # tokenizer_class = ("XLMRobertaTokenizer","XLMRobertaTokenizerFast")
-    tokenizer_class = ("BertTokenizer", "BertTokenizerFast","XLMRobertaTokenizerFast","XLMRobertaTokenizer")
+    tokenizer_class = ("XLMRobertaTokenizer","XLMRobertaTokenizerFast")
+    # tokenizer_class = ("BertTokenizer", "BertTokenizerFast")
     def __init__(self, feature_extractor, tokenizer):
         super().__init__(feature_extractor, tokenizer)
         # in some cases, we need to switch to different tokenizer
-        if tokenizer.vocab_size==250002:
-            self.tokenizer = XLMRobertaTokenizer.from_pretrained(tokenizer.name_or_path)
+        # if tokenizer.vocab_size!=250002:
+        #     print("tokenizer is not XLM-R, switched to BertTokenizer.")
+        #     self.tokenizer = BertTokenizer.from_pretrained(tokenizer.name_or_path)
 
 class ChineseCLIP(CLIPPreTrainedModel):
     config_class = ChCLIPConfig
@@ -339,6 +340,7 @@ class ChineseCLIP(CLIPPreTrainedModel):
             text_model_output=text_outputs,
             vision_model_output=vision_outputs,
         )
+
 class RobertaLayerStack(nn.Module):
     def __init__(self,config,projection_dim,num_layers) -> None:
         super().__init__()
@@ -470,7 +472,7 @@ class DoubleCLIP(CLIPPreTrainedModel):
         text_config = config.text_config
 
         text_config.hidden_dropout_prob = 0.
-        text_config.attention_probs_dropout_prob=0. 
+        text_config.attention_probs_dropout_prob = 0. 
         vision_config = config.vision_config
 
         self.projection_dim = config.projection_dim
@@ -489,6 +491,11 @@ class DoubleCLIP(CLIPPreTrainedModel):
 
         self.visual_projection = nn.Linear(self.vision_embed_dim, self.projection_dim, bias=False)
         self.text_projection = nn.Linear(self.text_embed_dim, self.projection_dim, bias=False)
+
+        # match CLIP weights
+        self.visual_projection.weight.data = clip_model.visual_projection.weight.data
+        self.text_projection.weight.data = clip_model.text_projection.weight.data
+
         self.logit_scale = nn.Parameter(torch.ones([]) * self.config.logit_scale_init_value)
         
         self.baseline = baseline
@@ -498,15 +505,15 @@ class DoubleCLIP(CLIPPreTrainedModel):
                 p.requires_grad_(False)
             for p in self.merge_head.parameters():
                 p.requires_grad_(False)
-            
-
-        # Initialize weights and apply final processing
-
+        
+        # init weights.
+        self.inverse_tfm.apply(self._init_weights)
+        self.merge_head.apply(self._init_weights)
+        
     def freeze_clip(self):
-        assert isinstance(self.clip_model,CLIPTextTransformer)
+        assert isinstance(self.clip_model,OurCLIPTextTransformer)
         for _,params in self.clip_model.named_parameters():
             params.requires_grad_(False)
-        
         
     def get_clip_features(
         self,
@@ -551,7 +558,6 @@ class DoubleCLIP(CLIPPreTrainedModel):
         pooled_output = text_outputs[1]
 
         return pooled_output
-
         
     def get_text_features(
         self,
@@ -589,16 +595,40 @@ class DoubleCLIP(CLIPPreTrainedModel):
         text_outputs = self.text_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             token_type_ids=token_type_ids,
+            position_ids=position_ids,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        pooled_output = text_outputs['pooler_output']
-        text_features = self.text_projection(pooled_output)
+        
+        if self.baseline:
+           text_projection = text_outputs['projection_state'].detach() 
+        else:
+           text_projection = text_outputs['projection_state']
+        # extend attention mask to [ batch_size ,seq_len ,seq_len ]
+        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, text_outputs['projection_state'].size()[:-1])
+        use_inter_encoder = True
+        if use_inter_encoder:
+            inputs_clip = self.inverse_tfm(
+                hidden_states=text_projection,
+                attention_mask=extended_attention_mask,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )[0]
+        else:
+            inputs_clip = text_projection
+        
+        clip_outputs = self.clip_model(
+            inputs_embeds=inputs_clip,
+            attention_mask=attention_mask,
+            input_ids_=input_ids,
+        )[1]
 
-        return text_features
+        text_embeds = clip_outputs
+        text_embeds = self.text_projection(text_embeds)
+        return text_embeds 
 
     @add_start_docstrings_to_model_forward(CLIP_VISION_INPUTS_DOCSTRING)
     def get_image_features(
@@ -775,6 +805,7 @@ class DoubleCLIP(CLIPPreTrainedModel):
             # merge_outputs=merge_outputs,
             # direct_outputs=direct_outputs,
         )
+
 class DoubleCLIPWithKD(DoubleCLIP):
     def forward(self, input_ids: Optional[torch.LongTensor] = None, attention_mask: Optional[torch.Tensor] = None, position_ids: Optional[torch.LongTensor] = None, token_type_ids=None, return_loss: Optional[bool] = None, output_attentions: Optional[bool] = None, output_hidden_states: Optional[bool] = None, return_dict: Optional[bool] = None) -> Union[Tuple, CLIPOutput]:
         # Use CLIP model's config for some fields (if specified) instead of those of vision & text components.

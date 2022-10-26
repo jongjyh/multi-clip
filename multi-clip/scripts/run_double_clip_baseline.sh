@@ -30,13 +30,12 @@ CUDA_VISIBLE_DEVICES=0 WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORM
     --warmup_steps ${warmup_steps} \
     --source_lang zh \
     --target_lang en \
-    --max_source_length 40 \
+    --max_source_length 75 \
     --num_train_epochs $ep \
     --remove_unused_columns false \
     --weight_decay $wd \
     --learning_rate $lr \
     --seed $seed \
-    --pad_to_max_length true \
     --report_to wandb \
     --evaluation_strategy steps \
     --save_total_limit 1 \

@@ -25,28 +25,17 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
-from transformers.models.xlm_roberta.tokenization_xlm_roberta import XLMRobertaTokenizer
-from models.modeling_clip import OurCLIPTextModel
 from models.modeling_berts import RobertaSeriesConfig
 from trainer import OurTrainer
 import numpy as np
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 
 import transformers
 from transformers import (
-    AutoConfig,
-    AutoModelForSeq2SeqLM,
     AutoTokenizer,
-    CLIPModel,
     DataCollatorForSeq2Seq,
-    HfArgumentParser,
-    M2M100Tokenizer,
-    MBart50Tokenizer,
-    MBart50TokenizerFast,
-    MBartTokenizer,
-    MBartTokenizerFast,
-    Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    HfArgumentParser,
     default_data_collator,
     set_seed,
 )
@@ -55,7 +44,6 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from transformers import (
-    CLIPProcessor,
     CLIPFeatureExtractor
 )
 from models.modeling_chclip import CHCLIPProcess,ChCLIPConfig, DoubleCLIPWithKD
@@ -70,7 +58,6 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/tran
 logger = logging.getLogger(__name__)
 
 # A list of all multilingual tokenizer which require src_lang and tgt_lang attributes.
-MULTILINGUAL_TOKENIZERS = [MBartTokenizer, MBartTokenizerFast, MBart50Tokenizer, MBart50TokenizerFast, M2M100Tokenizer]
 
 
 @dataclass
@@ -257,7 +244,7 @@ class KDArguments:
     prekd_ckpt: str = field(default=None, metadata={"help": "to be continued."})
     delta: str = field(default=None, metadata={"help": "to be continued."})
 
-def get_pretrained_model(kd_config,tokenizer):
+def get_pretrained_model(kd_config,tokenizer,device):
     config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
     config.text_config = RobertaSeriesConfig.from_pretrained(kd_config.student_model,
                                                              project_dim=config.projection_dim
@@ -265,7 +252,7 @@ def get_pretrained_model(kd_config,tokenizer):
     config.text_model_name = kd_config.student_model 
     config.vision_model_name = kd_config.teacher_model
     model = DoubleCLIPWithKD(config,baseline=kd_config.baseline)
-    teacher_model = model.clip_model
+    teacher_model = model.clip_model.to(device).eval()
     
     # tokenizer and feature_exactor
     feature_extractor = CLIPFeatureExtractor.from_pretrained(kd_config.teacher_model)
@@ -348,7 +335,7 @@ def main():
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-    if data_args.dataset_name is not None:
+    if data_args.dataset_name is not None and data_args.train_file is None:
         if True:
             # load from local 
             raw_datasets = datasets.load_from_disk(data_args.dataset_name)
@@ -405,7 +392,7 @@ def main():
         "baseline":kd_args.baseline
     }
     kd_config = PretrainedConfig(**kd_config_dict)
-    model,teacher_model,processor,teacher_tokenizer = get_pretrained_model(kd_config,tokenizer)
+    model,teacher_model,processor,teacher_tokenizer = get_pretrained_model(kd_config,tokenizer,training_args.device)
             
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
@@ -419,25 +406,6 @@ def main():
         logger.info("There is nothing to do. Please pass `do_train`, `do_eval` and/or `do_predict`.")
         return
 
-    # For translation we set the codes of our source and target languages (only useful for mBART, the others will
-    # ignore those attributes).
-    if isinstance(tokenizer, tuple(MULTILINGUAL_TOKENIZERS)):
-        assert data_args.target_lang is not None and data_args.source_lang is not None, (
-            f"{tokenizer.__class__.__name__} is a multilingual tokenizer which requires --source_lang and "
-            "--target_lang arguments."
-        )
-
-        tokenizer.src_lang = data_args.source_lang
-        tokenizer.tgt_lang = data_args.target_lang
-
-        # For multilingual translation models like mBART-50 and M2M100 we need to force the target language token
-        # as the first generated token. We ask the user to explicitly provide this as --forced_bos_token argument.
-        forced_bos_token_id = (
-            tokenizer.lang_code_to_id[data_args.forced_bos_token] if data_args.forced_bos_token is not None else None
-        )
-        model.config.forced_bos_token_id = forced_bos_token_id
-
-
     # Temporarily set max_target_length for training.
     max_target_length = data_args.max_target_length
     padding = "max_length" if data_args.pad_to_max_length else False
@@ -447,37 +415,35 @@ def main():
             "label_smoothing is enabled but the `prepare_decoder_input_ids_from_labels` method is not defined for"
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
-        
-    source_attr = "caption_zh"
-    target_attr = "caption"
-    def preprocess_function_train(examples):
-        inputs = [ex for ex in examples[source_attr]]
-        targets = [ex for ex in examples[target_attr]]
-        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-
-        eng_inputs = tokenizer(targets, max_length=data_args.max_source_length, padding=padding, truncation=True) 
-        for (k,v),(k1,v1) in zip(model_inputs.items(),eng_inputs.items()):
-            model_inputs[k1] = [*v,*v1]
-
-        teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
-
-        model_inputs['teacher_input_ids'] = [ *teacher_inputs['input_ids'],*teacher_inputs['input_ids'] ] 
-        model_inputs['teacher_attention_mask'] = [ *teacher_inputs['attention_mask'],*teacher_inputs['attention_mask'] ]
-
-        return model_inputs
 
     source_attr = "caption_zh"
     target_attr = "caption"
     def preprocess_function(examples):
+        # uc2 dataset
+        if isinstance( examples['caption'][0],list):
+            targets = [ dicts[0]['en']  for dicts in examples['caption'] for one_lingual in dicts[0].values() if one_lingual is not None]
+            inputs = [ one_lingual for dicts in examples['caption'] for one_lingual in dicts[0].values() if one_lingual is not None]
+        else:
+            inputs = [ex for ex in examples[source_attr]]
+            targets = [ex for ex in examples[target_attr]]
+        model_inputs = processor.tokenizer(inputs, max_length=data_args.max_source_length, padding=padding,truncation=True)
+        teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,padding=True,truncation=True,return_tensors='pt').to(training_args.device)
+        with torch.no_grad():
+            teacher_features = teacher_model(**teacher_inputs)[1]
+            model_inputs['teacher_features'] = teacher_features
 
-        inputs = [ex for ex in examples[source_attr]]
-        targets = [ex for ex in examples[target_attr]]
-        model_inputs = processor.tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-        teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
-        model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
-        model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
+        # model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
+        # model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
 
+    new_fingerprint="{teacher}_{seqlen}_{file}".format(
+        teacher=kd_args.teacher_model.split('/')[-1],
+        seqlen=data_args.max_source_length,
+        file=data_args.train_file.split('/')[-1],
+    )
+    logger.info("if you change the teacher or data please check the fingerprint.")
+    logger.info(f"now fingerprint for train:{new_fingerprint}")
+    
     if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
@@ -489,12 +455,20 @@ def main():
             train_dataset = train_dataset.map(
                 preprocess_function,
                 batched=True,
-                num_proc=data_args.preprocessing_num_workers,
+                batch_size=512,
+                num_proc=None,
                 remove_columns=column_names,
                 load_from_cache_file=True,
                 desc="Running tokenizer on train dataset",
+                new_fingerprint=new_fingerprint
             )
 
+    new_fingerprint="{teacher}_{seqlen}_{file}".format(
+        teacher=kd_args.teacher_model.split('/')[-1],
+        seqlen=data_args.max_source_length,
+        file=data_args.validation_file.split('/')[-1],
+    )
+    logger.info(f"now fingerprint for eval:{new_fingerprint}")
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
         if "validation" not in raw_datasets:
@@ -507,10 +481,12 @@ def main():
             eval_dataset = eval_dataset.map(
                 preprocess_function,
                 batched=True,
-                num_proc=data_args.preprocessing_num_workers,
+                batch_size=512,
+                num_proc=None,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on validation dataset",
+                new_fingerprint=new_fingerprint
             )
 
     if training_args.do_predict:
@@ -536,12 +512,7 @@ def main():
     if data_args.pad_to_max_length:
         data_collator = default_data_collator
     else:
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer,
-            model=model,
-            label_pad_token_id=label_pad_token_id,
-            pad_to_multiple_of=8 if training_args.fp16 else None,
-        )
+        data_collator = None
 
     def compute_metrics(eval_preds):
         from sklearn.metrics.pairwise import cosine_similarity
@@ -582,10 +553,10 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        compute_metrics=compute_metrics ,
+        compute_metrics=compute_metrics,
     )
     trainer.teacher = teacher_model
-
+    trainer.processor = processor
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -608,21 +579,33 @@ def main():
 
     # Evaluation
     results = {}
-    max_length = (
-        training_args.generation_max_length
-        if training_args.generation_max_length is not None
-        else data_args.val_max_target_length
-    )
-    num_beams = data_args.num_beams if data_args.num_beams is not None else training_args.generation_num_beams
     if training_args.do_eval:
-        logger.info("*** Evaluate ***")
-
-        metrics = trainer.evaluate()
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
+        if trainer.is_world_process_zero():
+            logger.info("*** Evaluate ***")
+            dataset_attr = (
+                "flickr30k","flickr30k-cn","imagenet1k","imagenet1k_zh"
+            )
+            sys.path.append('/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal')
+            from CLIP_benchmark_internal.evaluate import evaluate
+            dataset_metrics = {}
+            for name in dataset_attr:
+                metrics = evaluate(
+                        dataset_name=name,
+                        model_name=training_args.output_dir,
+                        pretrained='pretrained',                    
+                        output=f'/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal/results/myexp/{training_args.run_name}.json',
+                        dataset_root="/sharefs/baai-mmdataset/clip_benchmark_datasets",
+                        recall_k=[1,5,10],
+                        model=model,
+                        processor=processor
+                )
+                
+                trainer.log_metrics("test", metrics)
+                trainer.save_metrics("test", metrics)
+                
+                for key in metrics.keys():
+                    dataset_metrics[f"{name}/{key}"] = metrics[key]
+            trainer.log(dataset_metrics)
 
     if training_args.do_predict:
         logger.info("*** Predict ***")
@@ -668,9 +651,6 @@ def main():
         trainer.create_model_card(**kwargs)
 
     return results
-
-
-
 
 if __name__ == "__main__":
     main()
