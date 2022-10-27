@@ -33,7 +33,6 @@ from datasets import load_dataset
 import transformers
 from transformers import (
     AutoTokenizer,
-    DataCollatorForSeq2Seq,
     Seq2SeqTrainingArguments,
     HfArgumentParser,
     default_data_collator,
@@ -245,30 +244,29 @@ class KDArguments:
     to be continued.
     """
 
-    loss_fn: str = field(default=None, metadata={"help": "to be continued."})
-    pooler_fn: str = field(default=None, metadata={"help": "to be continued."})
-    layer_kd: bool = field(default=False, metadata={
-                           "help": "to be continued."})
-    baseline: bool = field(default=False, metadata={
-                           "help": "to be continued."})
     teacher_model: str = field(default=None, metadata={
                                "help": "to be continued."})
-    alpha: float = field(default=.1, metadata={"help": "to be continued."})
-    kd_type: str = field(default='kd', metadata={"help": "to be continued."})
-    prekd_ckpt: str = field(default=None, metadata={
-                            "help": "to be continued."})
-    delta: str = field(default=None, metadata={"help": "to be continued."})
+    student_model: str = field(default=None, metadata={
+                               "help": "to be continued."})
+    variant: str = field(default='invert', metadata={
+                               "help": "to be continued."})
+
 
 
 def get_pretrained_model(kd_config, tokenizer, device):
+    # model config 
+    ###############################
     config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
     config.text_config = RobertaSeriesConfig.from_pretrained(kd_config.student_model,
                                                              project_dim=config.projection_dim
                                                              )
     config.text_model_name = kd_config.student_model
     config.vision_model_name = kd_config.teacher_model
-    model = DoubleCLIPWithKD(config, baseline=kd_config.baseline)
-    teacher_model = model.clip_model.to(device).eval()
+    config.variant = kd_config.variant
+    ###############################
+
+    model = DoubleCLIPWithKD(config)
+    teacher_model = model.text_teacher.to(device).eval()
 
     # tokenizer and feature_exactor
     feature_extractor = CLIPFeatureExtractor.from_pretrained(
@@ -398,21 +396,8 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
     )
 
-    from transformers import PretrainedConfig
-    kd_config_dict = {
-        "teacher_model": kd_args.teacher_model,
-        "student_model": model_args.model_name_or_path,
-        "loss_fn": kd_args.loss_fn,
-        "pooler_fn": kd_args.pooler_fn,
-        "layer_kd": kd_args.layer_kd,
-        "alpha": kd_args.alpha,
-        "learn_encoder": False,
-        "kd_type": kd_args.kd_type,
-        "baseline": kd_args.baseline
-    }
-    kd_config = PretrainedConfig(**kd_config_dict)
     model, teacher_model, processor, teacher_tokenizer = get_pretrained_model(
-        kd_config, tokenizer, training_args.device)
+        kd_args, tokenizer, training_args.device)
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
@@ -441,9 +426,7 @@ def main():
     source_attr = "caption_zh"
     target_attr = "caption"
     # for multilingual dataset
-    # languages = ['zh', 'en']
-    languages = ['zh', 'en','cs','de','fr','ja']
-
+    languages = ['zh', 'en'] if 'enzh' in training_args.run_name  else ['zh', 'en','cs','de','fr','ja']
     def preprocess_function(examples):
         # uc2 dataset
         if isinstance(examples['caption'][0], list):
@@ -460,18 +443,14 @@ def main():
                                            padding=True, truncation=True, return_tensors='pt').to(training_args.device)
         with torch.no_grad():
             teacher_features = teacher_model(**teacher_inputs)[1]
-            # model_inputs['teacher_features'] = teacher_features
             model_inputs['labels'] = teacher_features
 
-        # model_inputs['teacher_input_ids'] = teacher_inputs['input_ids']
-        # model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
     new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}".format(
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.train_file.split('/')[-1],
-        languages=len(languages) # for 6 languages
-        # languages=languages # for en and zh
+        languages=len(languages) if len(languages) == 6 else languages# for 6 languages
     )
     logger.info(
         "if you change the teacher or data please check the fingerprint.")
@@ -501,8 +480,7 @@ def main():
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.validation_file.split('/')[-1],
-        languages=len(languages) # for 6 languages
-        # languages=languages # for en and zh
+        languages=len(languages) if len(languages) == 6 else languages# for 6 languages
     )
     logger.info(f"now fingerprint for eval:{new_fingerprint}")
     if training_args.do_eval:
@@ -510,9 +488,9 @@ def main():
         if "validation" not in raw_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = raw_datasets["validation"]
-        if data_args.max_eval_samples is not None:
+        if data_args.max_eval_samples is not None :
             max_eval_samples = min(
-                len(eval_dataset), data_args.max_eval_samples)
+                len(eval_dataset), data_args.max_eval_samples )
             eval_dataset = eval_dataset.select(range(max_eval_samples))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
@@ -521,7 +499,7 @@ def main():
                 batch_size=512,
                 num_proc=None,
                 remove_columns=column_names,
-                load_from_cache_file=not data_args.overwrite_cache,
+                load_from_cache_file=True,
                 desc="Running tokenizer on validation dataset",
                 new_fingerprint=new_fingerprint
             )
@@ -560,7 +538,6 @@ def main():
         preds, labels = eval_preds
         clip_outputs, teacher_outputs = preds, labels
         if isinstance(preds, tuple):
-            # print(preds[1])
             # clip_outputs,direct_outputs,merge_outputs,teacher_outputs = preds
             clip_outputs, teacher_outputs = preds
 
@@ -581,7 +558,6 @@ def main():
             # "mg_mse":        mg_mse_loss,
             "cp_cossim":     cp_cos_loss,
             "cp_mse":        cp_mse_loss,
-            # "di_loss":cossim_loss
         }
 
         result = {k: round(v, 4) for k, v in result.items()}
@@ -597,7 +573,6 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
-    trainer.teacher = teacher_model
     trainer.processor = processor
     # Training
     if training_args.do_train:
@@ -627,9 +602,8 @@ def main():
             logger.info("*** Evaluate ***")
             dataset_attr = (
                 "flickr30k", "flickr30k-cn", "imagenet1k", "imagenet1k_zh"
+                # "flickr30k", "flickr30k-cn"
             )
-            sys.path.append(
-                '/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal')
             from CLIP_benchmark_internal.evaluate import evaluate
             dataset_metrics = {}
             for name in dataset_attr:
@@ -637,18 +611,18 @@ def main():
                     dataset_name=name,
                     model_name=training_args.output_dir,
                     pretrained='pretrained',
-                    output=f'/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal/results/myexp/{training_args.run_name}.json',
+                    output=f'/home/chenzhongzhi/results/{training_args.run_name}.json',
                     dataset_root="/sharefs/baai-mmdataset/clip_benchmark_datasets",
                     recall_k=[1, 5, 10],
                     model=model,
                     processor=processor
                 )
 
-                trainer.log_metrics("test", metrics)
-                trainer.save_metrics("test", metrics)
+                trainer.log_metrics("eval", metrics)
+                trainer.save_metrics("eval", metrics)
 
                 for key in metrics.keys():
-                    dataset_metrics[f"{name}/{key}"] = metrics[key]
+                    dataset_metrics[f"eval_{name}_{key}"] = metrics[key]
             trainer.log(dataset_metrics)
 
     if training_args.do_predict:
@@ -689,8 +663,6 @@ def main():
         else:
             kwargs["dataset"] = data_args.dataset_name
 
-    languages = [l for l in [data_args.source_lang,
-                             data_args.target_lang] if l is not None]
     if len(languages) > 0:
         kwargs["language"] = languages
 
