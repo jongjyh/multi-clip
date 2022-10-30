@@ -446,11 +446,12 @@ def main():
             model_inputs['labels'] = teacher_features
 
         return model_inputs
-    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}".format(
+    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}{subset}".format(
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
         file=data_args.train_file.split('/')[-1],
-        languages=len(languages) if len(languages) == 6 else languages# for 6 languages
+        languages=len(languages) if len(languages) == 6 else languages,# for 6 languages
+        subset="300k" if '300k' in training_args.run_name else "" # for 300k subset
     )
     logger.info(
         "if you change the teacher or data please check the fingerprint.")
@@ -476,11 +477,12 @@ def main():
                 new_fingerprint=new_fingerprint
             )
 
-    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}".format(
+    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}{subset}".format(
         teacher=kd_args.teacher_model.split('/')[-1],
         seqlen=data_args.max_source_length,
-        file=data_args.validation_file.split('/')[-1],
-        languages=len(languages) if len(languages) == 6 else languages# for 6 languages
+        file=data_args.train_file.split('/')[-1],
+        languages=len(languages) if len(languages) == 6 else languages,# for 6 languages
+        subset="300k" if '300k' in training_args.run_name else ""
     )
     logger.info(f"now fingerprint for eval:{new_fingerprint}")
     if training_args.do_eval:

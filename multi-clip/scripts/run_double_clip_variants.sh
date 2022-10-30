@@ -6,9 +6,11 @@ ep=10
 seed=42
 task=multi-clip
 student=xlm-roberta-base
-teacher=openai/clip-vit-large-patch14
+teacher=openai/clip-vit-base-patch16
 bs=180
 warmup_steps=1000
+
+# direct is kd baseline, invert is bart-alike.
 # variant=direct
 variant=invert
 
@@ -23,15 +25,25 @@ else
 fi
 
 # multi gpu setting
-gpus=8
+gpus=4
 if [ $gpus -gt 1 ] ;then
     gpus="-m torch.distributed.launch --nproc_per_node $gpus"
 else
     gpus=""
 fi
+
+# be careful to set languages, cause we use languages to hash dataset.
 # languages=enzh
-languages=6lgs
-run_name=${variant}_cc3muc2_xlmBase_p14_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_$languages
+# languages=6lgs
+languages=6lgs_300k
+if echo $languages | grep -q "300k"; then
+    exp="${exp} --max_train_samples 300000"
+    echo "using 300k subset"
+else
+    echo "using full dataset"
+fi
+run_name=${variant}_cc3muc2_xlmBase_basep16_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_$languages
+
 # debug setting
 debug=0
 if [ $debug -eq 1 ] ;then
@@ -40,8 +52,8 @@ if [ $debug -eq 1 ] ;then
     --max_eval_samples 1000 --overwrite_output_dir --warmup_steps 0 --logging_steps 100
     "
     run_name=${run_name}_debug
-    # gpus="-m debugpy --listen 5679"
-    gpus=""
+    gpus="-m debugpy --listen 5679"
+    # gpus=""
 else
     debug=""
 fi
@@ -76,4 +88,4 @@ WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_
     --greater_is_better 1 \
     --teacher_model ${teacher} \
     --student_model ${student} \
-    --variant $variant  $debug
+    --variant $variant $exp $debug 
