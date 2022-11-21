@@ -1,3 +1,0 @@
-from models.modeling_chclip import DoubleCLIPWithKD
-
-DoubleCLIPWithKD.from_pretrained("/home/chenzhongzhi/ckpt/invert_cc3muc2_xlmBase_p14_bs180_wd1e-1_lr1e-4_ep1_ws1000_doubleclip_enzh_debug")

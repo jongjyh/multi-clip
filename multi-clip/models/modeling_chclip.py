@@ -8,6 +8,31 @@ from transformers.models.roberta.modeling_roberta import RobertaLayer,BaseModelO
 from transformers.models.clip.modeling_clip import CLIPOutput,_expand_mask
 from .modeling_clip import OurCLIPModel
 from .config_dict import STUDENT_MODEL_DICT,STUDENT_CONFIG_DICT
+import torch.distributed as dist
+
+def clip_loss(similarity: torch.Tensor) -> torch.Tensor:
+    student_loss = contrastive_loss(similarity)
+    return student_loss
+
+class AllGather(torch.autograd.Function):
+    """An autograd function that performs allgather on a tensor."""
+
+    @staticmethod
+    def forward(ctx, tensor, rank, world_size):
+        output = [torch.empty_like(tensor) for _ in range(world_size)]
+        dist.all_gather(output, tensor)
+        ctx.rank = rank
+        ctx.batch_size = tensor.shape[0]
+        return torch.cat(output, 0)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return (
+            grad_output[ctx.batch_size * ctx.rank: ctx.batch_size * (ctx.rank + 1)],
+            None,
+            None
+        )
+allgather = AllGather.apply
 
 @dataclass
 class OursCLIPOutput(CLIPOutput):
@@ -21,6 +46,7 @@ class OursCLIPOutput(CLIPOutput):
 class KDCLIPOutput(CLIPOutput):
     loss:torch.FloatTensor  = None
     pooled_outputs:torch.FloatTensor  = None
+    inputs_clip:torch.FloatTensor  = None
     def to_tuple(self) -> Tuple[Any]:
         return tuple(
             self[k] if k not in ["text_model_output", "vision_model_output"] else getattr(self, k).to_tuple()
@@ -437,10 +463,10 @@ class DoubleCLIP(CLIPPreTrainedModel):
         # inverse module and clip.
         if self.variant == 'invert':
             self.inverse_tfm = RobertaLayerStack(text_config,text_config.project_dim,config.num_layers)
-            self.merge_head = BertPredictionHeadTransform(config.text_config,config.text_config.project_dim)
+            # self.merge_head = BertPredictionHeadTransform(config.text_config,config.text_config.project_dim)
             # init weights.
             self.inverse_tfm.apply(self._init_weights)
-            self.merge_head.apply(self._init_weights)
+            # self.merge_head.apply(self._init_weights)
 
         self.visual_projection = nn.Linear(self.vision_embed_dim, self.projection_dim, bias=False)
         self.text_projection = nn.Linear(self.text_embed_dim, self.projection_dim, bias=False)
@@ -499,6 +525,8 @@ class DoubleCLIP(CLIPPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            mode=None
+            # mode='middle'
         )
         
         # extend attention mask to [ batch_size ,seq_len ,seq_len ]
@@ -522,7 +550,7 @@ class DoubleCLIP(CLIPPreTrainedModel):
             pooled_outputs = text_outputs['pooler_output']
 
         text_embeds = self.text_projection(pooled_outputs)
-        return text_embeds 
+        return text_embeds,inputs_clip 
 
     @add_start_docstrings_to_model_forward(CLIP_VISION_INPUTS_DOCSTRING)
     def get_image_features(
@@ -633,6 +661,8 @@ class DoubleCLIP(CLIPPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            mode=None
+            # mode='middle',
         )
 
         # extend attention mask to [ batch_size ,seq_len ,seq_len ]
@@ -707,6 +737,8 @@ class DoubleCLIPWithKD(DoubleCLIP):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            mode=None
+            # mode='middle',
         )
 
         # extend attention mask to [ batch_size ,seq_len ,seq_len ]
@@ -729,10 +761,24 @@ class DoubleCLIPWithKD(DoubleCLIP):
         else:
             pooled_outputs = text_outputs['pooler_output']
 
-        loss_fn = torch.nn.MSELoss()
-        loss = loss_fn(pooled_outputs,labels) if labels is not None else None
+        # loss_fn = 'cl and mse'
+        loss_fn = 'mse'
+        loss = 0.
+        if labels is not None and 'cl' in loss_fn:
+            # normalized features
+            teacher_embeds = labels / labels.norm(p=2, dim=-1, keepdim=True)
+            student_embeds = pooled_outputs / pooled_outputs.norm(p=2, dim=-1, keepdim=True)
+            teacher_embeds_all = allgather(student_embeds, torch.distributed.get_rank(), torch.distributed.get_world_size())
+            student_embeds_all = allgather(teacher_embeds, torch.distributed.get_rank(), torch.distributed.get_world_size())
+            logit_scale = self.logit_scale.exp()
+            logits_per_student = torch.matmul(student_embeds_all, teacher_embeds_all.t()) * logit_scale
+            loss += clip_loss(logits_per_student)
+        if labels is not None and 'mse' in loss_fn:
+            loss_f = torch.nn.MSELoss()
+            loss += loss_f(pooled_outputs,labels)
 
         return KDCLIPOutput(
             loss=loss,
             pooled_outputs=pooled_outputs,
+            inputs_clip=inputs_clip
         )

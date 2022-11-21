@@ -40,7 +40,9 @@ class OurCLIPTextTransformer(CLIPTextTransformer):
         if input_ids is not None:
             hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
         else:
-            hidden_states = inputs_embeds
+            # hidden_states = inputs_embeds
+            # we learn the token embeddings, and add the original position embeddings.
+            hidden_states = self.embeddings(inputs_embeds=inputs_embeds)
 
         bsz, seq_len = input_shape
         # CLIP's text model uses causal mask, prepare it here.

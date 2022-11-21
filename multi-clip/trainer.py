@@ -180,7 +180,8 @@ class OurTrainer(Trainer):
         if do_retrieve:
             dataset_attr = (
                 # "flickr30k", "flickr30k-cn", "imagenet1k", "imagenet1k_zh"
-                "flickr30k", "flickr30k-cn"
+                # "flickr30k", "flickr30k-cn"
+                "multi30k-de","multi30k-en","multi30k-fr","multi30k-cs",
 
             )
             sys.path.append(

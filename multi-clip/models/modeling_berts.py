@@ -2,9 +2,9 @@ from transformers import BertPreTrainedModel,BertModel,BertConfig
 import torch.nn as nn
 import torch
 from transformers.models.xlm_roberta.configuration_xlm_roberta import XLMRobertaConfig
-from transformers import XLMRobertaModel
+from .modeling_xlmr import XLMRobertaModel
 from transformers.activations import ACT2FN
-from typing import Optional
+from typing import Optional,Tuple,Union
 
 
 class BertSeriesConfig(BertConfig):
@@ -59,6 +59,7 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
         output_attentions: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        mode:Optional[str] = None,
     ) :
         r"""
         """
@@ -78,6 +79,7 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=True,
             return_dict=return_dict,
+            mode=mode,
         )
         
         # last module outputs
@@ -104,9 +106,3 @@ class BertSeriesModelWithTransformation(BertPreTrainedModel):
 class RobertaSeriesModelWithTransformation(BertSeriesModelWithTransformation):
     base_model_prefix = 'roberta'
     config_class= RobertaSeriesConfig
-
-
-if __name__=='__main__':
-    config = RobertaSeriesConfig.from_pretrained('xlm-roberta-base')
-    print(config.model_type)
-    RobertaSeriesModelWithTransformation.from_pretrained("xlm-roberta-base",config=config)

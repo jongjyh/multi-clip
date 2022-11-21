@@ -41,6 +41,7 @@ from transformers import (
     MBartTokenizer,
     MBartTokenizerFast,
     Seq2SeqTrainer,
+    Trainer,
     Seq2SeqTrainingArguments,
     default_data_collator,
     set_seed,
@@ -52,10 +53,14 @@ from transformers.utils.versions import require_version
 from transformers import (
     CLIPProcessor,
 )
-from models.modeling_chclip import ChCLIPConfig,CHCLIPProcess
-from models.modeling_kd import KDmodel
+from open_source_models.modeling_altclip import AltCLIPConfig,AltCLIP
+from open_source_models.processing_altclip import AltCLIPProcessor
+from open_source_models.modeling_kd import KDmodel
 import torch.nn as nn
+from typing import Mapping
 import torch
+from kd_trainer import OurTrainer
+from transformers.data.data_collator import DataCollatorForLanguageModeling,_torch_collate_batch
 # from utils.prekd_adapter import adding_adapter_layer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -65,9 +70,41 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/tran
 
 logger = logging.getLogger(__name__)
 
+    
 # A list of all multilingual tokenizer which require src_lang and tgt_lang attributes.
 MULTILINGUAL_TOKENIZERS = [MBartTokenizer, MBartTokenizerFast, MBart50Tokenizer, MBart50TokenizerFast, M2M100Tokenizer]
 
+
+class OurDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
+    def torch_call(self, examples):
+        # Handle dict or lists with proper padding and conversion to tensor.
+        if isinstance(examples[0], Mapping):
+            examples_ = [ {
+                            'input_ids':i.pop('teacher_input_ids'),
+                            'attention_mask':i.pop('teacher_attention_mask')
+                        } for i in examples]
+
+            batch = self.tokenizer.pad(examples, return_tensors="pt", pad_to_multiple_of=self.pad_to_multiple_of)
+            batch_ = self.tokenizer.pad(examples_, return_tensors="pt", pad_to_multiple_of=self.pad_to_multiple_of)
+            batch.data['teacher_input_ids']=batch_.pop('input_ids')
+            batch.data['teacher_attention_mask']=batch_.pop( 'attention_mask' )
+        else:
+            batch = {
+                "input_ids": _torch_collate_batch(examples, self.tokenizer, pad_to_multiple_of=self.pad_to_multiple_of)
+            }
+
+        # If special token mask has been preprocessed, pop it from the dict.
+        special_tokens_mask = batch.pop("special_tokens_mask", None)
+        if self.mlm:
+            batch["mlm_input_ids"], batch["mlm_labels"] = self.torch_mask_tokens(
+                batch["input_ids"], special_tokens_mask=special_tokens_mask
+            )
+        else:
+            labels = batch["input_ids"].clone()
+            if self.tokenizer.pad_token_id is not None:
+                labels[labels == self.tokenizer.pad_token_id] = -100
+            batch["labels"] = labels
+        return batch
 
 @dataclass
 class ModelArguments:
@@ -121,6 +158,7 @@ class DataTrainingArguments:
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
     train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a jsonlines)."})
+    sub_train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a jsonlines)."})
     validation_file: Optional[str] = field(
         default=None,
         metadata={
@@ -353,6 +391,18 @@ def main():
             cache_dir=model_args.cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
         )
+        datasets_ = raw_datasets['train'].train_test_split(test_size=5000)
+        datasets_['validation'] = datasets_.pop('test')
+        raw_datasets = datasets_
+        
+        if data_args.sub_train_file is not None:
+            sub_dataset = load_dataset(
+                'json',
+                data_files=data_args.sub_train_file,
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )           
+            sub_dataset = sub_dataset['train']
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -382,7 +432,7 @@ def main():
         from transformers import PretrainedConfig
         tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
         processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
-        mix_processor = CHCLIPProcess(feature_extractor=processor.feature_extractor,tokenizer=tokenizer)
+        mix_processor = AltCLIPProcessor(feature_extractor=processor.feature_extractor,tokenizer=tokenizer)
         kd_config_dict = {
             "teacher_model":kd_args.teacher_model,
             "student_model":model_args.model_name_or_path,
@@ -400,8 +450,8 @@ def main():
         elif kd_args.kd_type == 'postkd':
         # for post KD
             model = KDmodel(kd_config) 
-            from models.modeling_chclip import ChineseCLIP
-            pre_clip = ChineseCLIP.from_pretrained(kd_args.prekd_ckpt)
+            from open_source_models.modeling_altclip import AltCLIP
+            pre_clip = AltCLIP.from_pretrained(kd_args.prekd_ckpt)
             model.student = pre_clip.text_model
             model.student_config = model.student.config
         elif 'prekd' in kd_args.kd_type :
@@ -471,12 +521,7 @@ def main():
         )
         model.config.forced_bos_token_id = forced_bos_token_id
 
-    # Get the language codes for input/target.
-    source_lang = data_args.source_lang.split("_")[0]
-    target_lang = data_args.target_lang.split("_")[0]
-
     # Temporarily set max_target_length for training.
-    max_target_length = data_args.max_target_length
     padding = "max_length" if data_args.pad_to_max_length else False
 
     if training_args.label_smoothing_factor > 0 and not hasattr(model, "prepare_decoder_input_ids_from_labels"):
@@ -505,14 +550,15 @@ def main():
         return model_inputs
 
     # source_attr = "caption_zh"
-    # source_attr = "caption"
-    # target_attr = "caption"
+    source_attr = "target_text"
+    target_attr = "source_text"
     def preprocess_function(examples):
 
         inputs = [ex for ex in examples[source_attr]]
         targets = [ex for ex in examples[target_attr]]
-        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-        teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True,return_special_tokens_mask=True)
+        teacher_inputs = processor.tokenizer(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,return_special_tokens_mask=True)
+        if any((len(i)>74 for i in teacher_inputs['input_ids']) ): raise ValueError
         model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
         model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
@@ -524,15 +570,27 @@ def main():
         if data_args.max_train_samples is not None:
             max_train_samples = min(len(train_dataset), data_args.max_train_samples)
             train_dataset = train_dataset.select(range(max_train_samples))
-        with training_args.main_process_first(desc="train dataset map pre-processing"):
+            if data_args.sub_train_file is not None:
+                sub_dataset = sub_dataset.select(range(max_train_samples))
+        with training_args.main_process_first(local=False,desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
-                preprocess_function_train,
+                preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on train dataset",
+                desc="running tokenizer on train dataset",
             )
+        if data_args.sub_train_file is not None:
+            with training_args.main_process_first(local=False,desc="train dataset map pre-processing"):
+                sub_dataset = sub_dataset.map(
+                    preprocess_function,
+                    batched=True,
+                    num_proc=data_args.preprocessing_num_workers,
+                    remove_columns=column_names,
+                    load_from_cache_file=not data_args.overwrite_cache,
+                    desc="running tokenizer on train dataset",
+                )
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -542,9 +600,9 @@ def main():
         if data_args.max_eval_samples is not None:
             max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
             eval_dataset = eval_dataset.select(range(max_eval_samples))
-        with training_args.main_process_first(desc="validation dataset map pre-processing"):
+        with training_args.main_process_first(local=False,desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
-                preprocess_function_train,
+                preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -560,7 +618,7 @@ def main():
         if data_args.max_predict_samples is not None:
             max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
             predict_dataset = predict_dataset.select(range(max_predict_samples))
-        with training_args.main_process_first(desc="prediction dataset map pre-processing"):
+        with training_args.main_process_first(local=False,desc="prediction dataset map pre-processing"):
             predict_dataset = predict_dataset.map(
                 preprocess_function,
                 batched=True,
@@ -571,15 +629,13 @@ def main():
             )
 
     # Data collator
-    label_pad_token_id = -100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
     if data_args.pad_to_max_length:
         data_collator = default_data_collator
     else:
-        data_collator = DataCollatorForSeq2Seq(
+        data_collator = OurDataCollatorForLanguageModeling(
             tokenizer,
-            model=model,
-            label_pad_token_id=label_pad_token_id,
-            pad_to_multiple_of=8 if training_args.fp16 else None,
+            mlm_probability=0.15,
+            pad_to_multiple_of=8,
         )
 
     # Metric
@@ -615,7 +671,7 @@ def main():
     def compute_metrics(eval_preds):
         preds, _ = eval_preds
         if isinstance(preds, tuple):
-            x,y = preds[0],preds[1]
+            x,y,mse_loss,mlm_loss = preds
         
         # convert to tensor 
         x,y = torch.from_numpy(x),torch.from_numpy(y)
@@ -627,18 +683,20 @@ def main():
         cos_loss = cosine_sim(x,y,torch.Tensor([1.])).item()
         mse_loss = mse(x,y).item()
         l1_loss = l1(x,y).item()
+        mlm_loss = mlm_loss.mean()
         
         result = {
             "cossim_loss":cos_loss,
             "mse":mse_loss,
             "l1_loss":l1_loss,
+            "mlm_loss":mlm_loss
         }
 
         result = {k: round(v, 4) for k, v in result.items()}
         return result
 
     # Initialize our Trainer
-    trainer = Seq2SeqTrainer(
+    trainer = OurTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -647,7 +705,8 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics ,
     )
-
+    if data_args.sub_train_file is not None:
+        trainer.sub_dataset = sub_dataset
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -679,7 +738,7 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
 
-        metrics = trainer.evaluate(max_length=max_length, num_beams=num_beams, metric_key_prefix="eval")
+        metrics = trainer.evaluate( metric_key_prefix="eval")
         max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
         metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
 
@@ -714,10 +773,9 @@ def main():
     # save as clip model
     if training_args.local_rank==0 or training_args.local_rank == -1 :
         kd_model = trainer.model
-        chinese_clip_config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
+        chinese_clip_config = AltCLIPConfig.from_pretrained(kd_config.teacher_model)
         chinese_clip_config.text_config = kd_model.student_config
-        from models.modeling_chclip import ChineseCLIP
-        chinese_clip = ChineseCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
+        chinese_clip = AltCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
         chinese_clip.text_model = kd_model.student
         chinese_clip.save_pretrained(training_args.output_dir)
         mix_processor.save_pretrained(training_args.output_dir)

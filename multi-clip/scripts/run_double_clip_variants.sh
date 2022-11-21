@@ -7,7 +7,7 @@ seed=42
 task=multi-clip
 student=xlm-roberta-base
 teacher=openai/clip-vit-base-patch16
-bs=180
+bs=256
 warmup_steps=1000
 
 # direct is kd baseline, invert is bart-alike.
@@ -42,7 +42,7 @@ if echo $languages | grep -q "300k"; then
 else
     echo "using full dataset"
 fi
-run_name=${variant}_cc3muc2_xlmBase_basep16_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_$languages
+run_name=${variant}_clandmse_cc3muc2_xlmBase_basep16_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_$languages
 
 # debug setting
 debug=0
@@ -52,7 +52,7 @@ if [ $debug -eq 1 ] ;then
     --max_eval_samples 1000 --overwrite_output_dir --warmup_steps 0 --logging_steps 100
     "
     run_name=${run_name}_debug
-    gpus="-m debugpy --listen 5679"
+    gpus="-m debugpy --listen 5678"
     # gpus=""
 else
     debug=""
@@ -84,7 +84,7 @@ WANDB_MODE=offline WANDB_PROJECT=double-clip HF_DATASETS_OFFLINE=1 TRANSFORMERS_
     --dataset_name $dst \
     --per_device_train_batch_size $bs \
     --per_device_eval_batch_size 256 \
-    --metric_for_best_model eval_flickr30k-cn_mean_retrieval_recall \
+    --metric_for_best_model eval_multi30k-en_mean_retrieval_recall \
     --greater_is_better 1 \
     --teacher_model ${teacher} \
     --student_model ${student} \
