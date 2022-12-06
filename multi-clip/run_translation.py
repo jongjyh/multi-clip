@@ -24,6 +24,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+from glob import glob
 import datasets
 import numpy as np
 from datasets import load_dataset, load_metric
@@ -61,6 +62,8 @@ from typing import Mapping
 import torch
 from kd_trainer import OurTrainer
 from transformers.data.data_collator import DataCollatorForLanguageModeling,_torch_collate_batch
+from clip.clip import tokenize 
+from clip.hf_model import HFTextEncoder
 # from utils.prekd_adapter import adding_adapter_layer
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -100,10 +103,11 @@ class OurDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
                 batch["input_ids"], special_tokens_mask=special_tokens_mask
             )
         else:
-            labels = batch["input_ids"].clone()
-            if self.tokenizer.pad_token_id is not None:
-                labels[labels == self.tokenizer.pad_token_id] = -100
-            batch["labels"] = labels
+            pass
+            # labels = batch["input_ids"].clone()
+            # if self.tokenizer.pad_token_id is not None:
+            #     labels[labels == self.tokenizer.pad_token_id] = -100
+            # batch["labels"] = labels
         return batch
 
 @dataclass
@@ -176,7 +180,7 @@ class DataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     preprocessing_num_workers: Optional[int] = field(
-        default=16,
+        default=8,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     max_source_length: Optional[int] = field(
@@ -375,18 +379,19 @@ def main():
                 use_auth_token=True if model_args.use_auth_token else None,
             )
     else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-            extension = data_args.train_file.split(".")[-1]
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-            extension = data_args.validation_file.split(".")[-1]
-        if data_args.test_file is not None:
-            data_files["test"] = data_args.test_file
-            extension = data_args.test_file.split(".")[-1]
+        # data_files = {}
+        data_files = glob(data_args.train_file)
+        # if data_args.train_file is not None:
+        #     data_files["train"] = data_args.train_file
+        #     extension = data_args.train_file.split(".")[-1]
+        # if data_args.validation_file is not None:
+        #     data_files["validation"] = data_args.validation_file
+        #     extension = data_args.validation_file.split(".")[-1]
+        # if data_args.test_file is not None:
+        #     data_files["test"] = data_args.test_file
+        #     extension = data_args.test_file.split(".")[-1]
         raw_datasets = load_dataset(
-            extension,
+            'json',
             data_files=data_files,
             cache_dir=model_args.cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
@@ -410,87 +415,39 @@ def main():
     #
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
-    # download model & vocab.
-    if True:
-        pass
-    else:
-        config = AutoConfig.from_pretrained(
-            model_args.config_name if model_args.config_name else model_args.model_name_or_path,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
-        cache_dir=model_args.cache_dir,
-        use_fast=model_args.use_fast_tokenizer,
-        revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
-    )
-    
-    if True:
-        from transformers import PretrainedConfig
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-        processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
-        mix_processor = AltCLIPProcessor(feature_extractor=processor.feature_extractor,tokenizer=tokenizer)
-        kd_config_dict = {
-            "teacher_model":kd_args.teacher_model,
-            "student_model":model_args.model_name_or_path,
-            "loss_fn":kd_args.loss_fn,
-            "pooler_fn":kd_args.pooler_fn,
-            "layer_kd":kd_args.layer_kd,
-            "alpha":kd_args.alpha,
-            "learn_encoder":False,
-            "kd_type":kd_args.kd_type,
-        }
-        kd_config = PretrainedConfig(**kd_config_dict)
-        if kd_args.kd_type == 'kd':
-        # for origin kd
-            model = KDmodel(kd_config) 
-        elif kd_args.kd_type == 'postkd':
-        # for post KD
-            model = KDmodel(kd_config) 
-            from open_source_models.modeling_altclip import AltCLIP
-            pre_clip = AltCLIP.from_pretrained(kd_args.prekd_ckpt)
-            model.student = pre_clip.text_model
-            model.student_config = model.student.config
-        elif 'prekd' in kd_args.kd_type :
-        # for pre kd
-            model = KDmodel(kd_config)
-            # use adapter
-            if kd_args.delta == 'adapter' :
-                adding_adapter_layer(model.student,model.student.config.project_dim)
-            
-        # # some exp setting will be excuted here
-        
-        # en_word_embedding_zero_shifting(model.student,mix_processor.tokenizer,eps=1e-2)
-        # en_word_embedding_zero_norm(model.student,mix_processor.tokenizer)
-        # zh_en_word_embedding_shift(model.student,mix_processor.tokenizer)
-
-    else:
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_args.model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=config,
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
-
-        model.resize_token_embeddings(len(tokenizer))
-
-        # Set decoder_start_token_id
-        if model.config.decoder_start_token_id is None and isinstance(tokenizer, (MBartTokenizer, MBartTokenizerFast)):
-            if isinstance(tokenizer, MBartTokenizer):
-                model.config.decoder_start_token_id = tokenizer.lang_code_to_id[data_args.target_lang]
-            else:
-                model.config.decoder_start_token_id = tokenizer.convert_tokens_to_ids(data_args.target_lang)
-
-        if model.config.decoder_start_token_id is None:
-            raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
-
-        prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
-
+    eva=False 
+    mlm=False
+    from transformers import PretrainedConfig
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
+    mix_processor = AltCLIPProcessor(feature_extractor=processor.feature_extractor,tokenizer=tokenizer)
+    kd_config_dict = {
+        "teacher_model":kd_args.teacher_model,
+        "student_model":model_args.model_name_or_path,
+        "loss_fn":kd_args.loss_fn,
+        "pooler_fn":kd_args.pooler_fn,
+        "layer_kd":kd_args.layer_kd,
+        "alpha":kd_args.alpha,
+        "learn_encoder":False,
+        "kd_type":kd_args.kd_type,
+    }
+    kd_config = PretrainedConfig(**kd_config_dict)
+    if kd_args.kd_type == 'kd':
+    # for origin kd
+        model = KDmodel(kd_config,EVA=eva) 
+    elif kd_args.kd_type == 'postkd':
+    # for post KD
+        model = KDmodel(kd_config) 
+        pre_clip = AltCLIP.from_pretrained(kd_args.prekd_ckpt)
+        model.student = pre_clip.text_model
+        model.student_config = model.student.config
+    elif 'prekd' in kd_args.kd_type :
+    # for pre kd
+        model = KDmodel(kd_config)
+        # use adapter
+        if kd_args.delta == 'adapter' :
+            adding_adapter_layer(model.student,model.student.config.project_dim)
+                
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
     if training_args.do_train:
@@ -556,9 +513,8 @@ def main():
 
         inputs = [ex for ex in examples[source_attr]]
         targets = [ex for ex in examples[target_attr]]
-        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True,return_special_tokens_mask=True)
-        teacher_inputs = processor.tokenizer(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,return_special_tokens_mask=True)
-        if any((len(i)>74 for i in teacher_inputs['input_ids']) ): raise ValueError
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        teacher_inputs = processor(targets, max_length=data_args.max_source_length,padding=padding,truncation=True,)
         model_inputs['teacher_input_ids'] = teacher_inputs['input_ids'] 
         model_inputs['teacher_attention_mask'] = teacher_inputs['attention_mask']
         return model_inputs
@@ -572,17 +528,18 @@ def main():
             train_dataset = train_dataset.select(range(max_train_samples))
             if data_args.sub_train_file is not None:
                 sub_dataset = sub_dataset.select(range(max_train_samples))
-        with training_args.main_process_first(local=False,desc="train dataset map pre-processing"):
+        with training_args.main_process_first(desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
                 preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
+                batch_size=10000,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="running tokenizer on train dataset",
             )
         if data_args.sub_train_file is not None:
-            with training_args.main_process_first(local=False,desc="train dataset map pre-processing"):
+            with training_args.main_process_first(desc="train dataset map pre-processing"):
                 sub_dataset = sub_dataset.map(
                     preprocess_function,
                     batched=True,
@@ -600,11 +557,11 @@ def main():
         if data_args.max_eval_samples is not None:
             max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
             eval_dataset = eval_dataset.select(range(max_eval_samples))
-        with training_args.main_process_first(local=False,desc="validation dataset map pre-processing"):
+        with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
                 preprocess_function,
                 batched=True,
-                num_proc=data_args.preprocessing_num_workers,
+                num_proc=None,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on validation dataset",
@@ -618,7 +575,7 @@ def main():
         if data_args.max_predict_samples is not None:
             max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
             predict_dataset = predict_dataset.select(range(max_predict_samples))
-        with training_args.main_process_first(local=False,desc="prediction dataset map pre-processing"):
+        with training_args.main_process_first(desc="prediction dataset map pre-processing"):
             predict_dataset = predict_dataset.map(
                 preprocess_function,
                 batched=True,
@@ -635,8 +592,8 @@ def main():
         data_collator = OurDataCollatorForLanguageModeling(
             tokenizer,
             mlm_probability=0.15,
-            pad_to_multiple_of=8,
         )
+        data_collator.mlm = mlm
 
     # Metric
     # metric = load_metric("sacrebleu")
@@ -671,7 +628,10 @@ def main():
     def compute_metrics(eval_preds):
         preds, _ = eval_preds
         if isinstance(preds, tuple):
-            x,y,mse_loss,mlm_loss = preds
+            if mlm:
+                x,y,mse_loss,mlm_loss = preds
+            else :
+                _,x,y = preds
         
         # convert to tensor 
         x,y = torch.from_numpy(x),torch.from_numpy(y)
@@ -681,9 +641,9 @@ def main():
         l1 = nn.L1Loss()
         assert len(x) == len(y)
         cos_loss = cosine_sim(x,y,torch.Tensor([1.])).item()
-        mse_loss = mse(x,y).item()
+        mse_loss = mse(x,y).item() 
         l1_loss = l1(x,y).item()
-        mlm_loss = mlm_loss.mean()
+        mlm_loss = mlm_loss.mean() if mlm else 0.
         
         result = {
             "cossim_loss":cos_loss,
@@ -705,6 +665,7 @@ def main():
         data_collator=data_collator,
         compute_metrics=compute_metrics ,
     )
+    trainer.do_mlm = mlm
     if data_args.sub_train_file is not None:
         trainer.sub_dataset = sub_dataset
     # Training
@@ -772,13 +733,26 @@ def main():
 
     # save as clip model
     if training_args.local_rank==0 or training_args.local_rank == -1 :
-        kd_model = trainer.model
-        chinese_clip_config = AltCLIPConfig.from_pretrained(kd_config.teacher_model)
-        chinese_clip_config.text_config = kd_model.student_config
-        chinese_clip = AltCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
-        chinese_clip.text_model = kd_model.student
-        chinese_clip.save_pretrained(training_args.output_dir)
-        mix_processor.save_pretrained(training_args.output_dir)
+        if eva:
+            hf_encoder = HFTextEncoder(
+                "xlm-roberta-large",
+                output_dim=model.text_projection.data.shape[0],
+                config=model.student_config,
+                proj='linear',
+            )
+            hf_encoder.transformer = model.student
+            hf_encoder.proj = model.text_projection
+            model.student_config.save_pretrained(training_args.output_dir)
+            mix_processor.tokenizer.save_pretrained(training_args.output_dir)
+            torch.save(hf_encoder.state_dict(),training_args.output_dir + "/hf_encoder.pt")
+        else:
+            kd_model = trainer.model
+            chinese_clip_config = AltCLIPConfig.from_pretrained(kd_config.teacher_model)
+            chinese_clip_config.text_config = kd_model.student_config
+            chinese_clip = AltCLIP.from_pretrained(kd_config.teacher_model,ignore_mismatched_sizes=True,config=chinese_clip_config)
+            chinese_clip.text_model = kd_model.student
+            chinese_clip.save_pretrained(training_args.output_dir)
+            mix_processor.save_pretrained(training_args.output_dir)
 
 
 

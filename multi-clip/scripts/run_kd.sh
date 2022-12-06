@@ -1,5 +1,5 @@
 # exp
-lr=5e-5
+lr=1e-4
 wd=2e-1
 ep=10
 seed=42
@@ -12,15 +12,16 @@ student=xlm-roberta-large
 teacher=openai/clip-vit-large-patch14
 alpha=.1
 # dataset path
-# train="/home/chenzhongzhi/czz/datasets/la13m_para5m_multilingual/multi18m_12lgs.json  --sub_train_file /home/chenzhongzhi/czz/datasets/la13m_para5m_multilingual/multi18m_9lgs.json"
-train="/home/chenzhongzhi/czz/datasets/la13m_para5m_multilingual/multi18m_12lgs.json"
+# train="/home/chenzhongzhi/czz/datasets/la13m_para5m_multilingual/multi18m_18lgs_ena.json"
+train='/home/chenzhongzhi/czz/datasets/la13m_para5m_multilingual/laion2b_multi18lg/*.json'
+# train='/home/chenzhongzhi/czz/datasets/la13m_para5m_multilingual/test_10k.json'
 
 # eval=/sharefs/baai-mrnd/czz/datasets/la28m-cc3m-ts5m/eval.json
-bs=32
+bs=512
 
 # multinode multigpu settings
 gpus=8
-nnodes=6
+nnodes=1
 if [ $gpus -gt 1 ] ;then
     gpus="-m torch.distributed.launch \
     --nproc_per_node=$gpus "
@@ -34,13 +35,14 @@ if [ $gpus -gt 1 ] ;then
         --master_port=$port"
     fi
 else
-    gpus="-m debugpy --listen 5678"
+    gpus=""
 fi
 warmup_steps=500
 # kd_type=postkd
 kd_type=kd
 # run_name is also output path
-run_name=${kd_type}_12lgs_18m_lmloss_fs
+run_name=${kd_type}_18lg
+
 
 
 # WANDB_PROJECT=clip-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python /home/chenzhongzhi/multi-clip/multi-clip/run_translation.py  \
@@ -49,10 +51,11 @@ WANDB_MODE=offline WANDB_PROJECT=bilingual-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS
     --model_name_or_path ${student} \
     --do_train \
     --do_eval \
+    --fp16 \
     --warmup_steps ${warmup_steps} \
     --source_lang zh \
     --target_lang en \
-    --max_source_length 70 \
+    --max_source_length 75 \
     --num_train_epochs $ep \
     --weight_decay $wd \
     --learning_rate $lr \
@@ -62,7 +65,7 @@ WANDB_MODE=offline WANDB_PROJECT=bilingual-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS
     --run_name ${run_name} \
     --logging_steps 500 \
     --output_dir ckpt/${run_name} \
-    --train_file ${train}  \
+    --train_file "${train}"  \
     --per_device_train_batch_size $bs \
     --per_device_eval_batch_size 64 \
     --save_strategy epoch \
@@ -73,4 +76,4 @@ WANDB_MODE=offline WANDB_PROJECT=bilingual-kd HF_DATASETS_OFFLINE=1 TRANSFORMERS
     --layer_kd ${layer_kd} \
     --teacher_model ${teacher} \
     --alpha ${alpha} \
-    --kd_type ${kd_type} \
+    --kd_type ${kd_type} 
