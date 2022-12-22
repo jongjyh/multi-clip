@@ -43,7 +43,9 @@ class OurTrainer(Trainer):
                     state_dict = self.model.state_dict()
                 torch.save(state_dict, os.path.join(output_dir, WEIGHTS_NAME))
         else:
+            self.model.vision_model = self.vision_model
             self.model.save_pretrained(output_dir, state_dict=state_dict)
+            self.model.vision_model = None
         # saving processor
         if self.processor is not None:
             self.processor.save_pretrained(output_dir)
@@ -181,8 +183,8 @@ class OurTrainer(Trainer):
             dataset_attr = (
                 # "flickr30k", "flickr30k-cn", "imagenet1k", "imagenet1k_zh"
                 # "flickr30k", "flickr30k-cn"
-                "multi30k-de","multi30k-en","multi30k-fr","multi30k-cs",
-
+                # "multi30k-de","multi30k-en","multi30k-fr","multi30k-cs",
+                'imagenet1k',
             )
             sys.path.append(
                 '/home/chenzhongzhi/multi-clip/multi-clip/CLIP_benchmark_internal')

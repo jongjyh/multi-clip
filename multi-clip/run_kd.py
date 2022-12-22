@@ -23,6 +23,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
+from glob import glob
 
 import datasets
 from models.modeling_berts import RobertaSeriesConfig
@@ -32,6 +33,7 @@ from datasets import load_dataset
 
 import transformers
 from transformers import (
+    AutoModel,
     AutoTokenizer,
     Seq2SeqTrainingArguments,
     HfArgumentParser,
@@ -249,12 +251,11 @@ class KDArguments:
     student_model: str = field(default=None, metadata={
                                "help": "to be continued."})
     variant: str = field(default='invert', metadata={
-                               "help": "to be continued."})
+        "help": "to be continued."})
 
 
-
-def get_pretrained_model(kd_config, tokenizer, device):
-    # model config 
+def get_pretrained_model(kd_config, tokenizer, device, rank):
+    # model config
     ###############################
     config = ChCLIPConfig.from_pretrained(kd_config.teacher_model)
     config.text_config = RobertaSeriesConfig.from_pretrained(kd_config.student_model,
@@ -265,16 +266,21 @@ def get_pretrained_model(kd_config, tokenizer, device):
     config.variant = kd_config.variant
     ###############################
 
+    # model = DoubleCLIPWithKD(config)
     model = DoubleCLIPWithKD(config)
-    teacher_model = model.text_teacher.to(device).eval()
-
+    vision_model = model.vision_model if (rank == 0 or rank==-1) else None
+    model.vision_model = None 
+    
+    teacher_model = AutoModel.from_pretrained(kd_config.teacher_model).text_model
+    teacher_model = teacher_model.to(device).eval()
+    
     # tokenizer and feature_exactor
     feature_extractor = CLIPFeatureExtractor.from_pretrained(
         kd_config.teacher_model)
     teacher_tokenizer = AutoTokenizer.from_pretrained(kd_config.teacher_model)
 
     processor = CHCLIPProcess(feature_extractor, tokenizer)
-    return (model, teacher_model, processor, teacher_tokenizer)
+    return (model, teacher_model, processor, teacher_tokenizer,vision_model)
 
 
 def main():
@@ -353,33 +359,42 @@ def main():
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.dataset_name is not None and data_args.train_file is None:
-        if True:
-            # load from local
-            raw_datasets = datasets.load_from_disk(data_args.dataset_name)
-        else:
-            # Downloading and loading a dataset from the hub.
-            raw_datasets = load_dataset(
-                data_args.dataset_name,
+        # load from local
+        raw_datasets = datasets.load_from_disk(data_args.dataset_name)
+        # Downloading and loading a dataset from the hub.
+        # raw_datasets = load_dataset(
+        #     data_args.dataset_name,
+        #     cache_dir=model_args.cache_dir,
+        #     use_auth_token=True if model_args.use_auth_token else None,
+        # )
+    else:
+        if '*' in data_args.train_file:
+            data_files = glob(data_args.train_file)
+            raw_train = load_dataset(
+                extension,
+                data_files=data_files,
                 cache_dir=model_args.cache_dir,
                 use_auth_token=True if model_args.use_auth_token else None,
             )
-    else:
-        data_files = {}
-        if data_args.train_file is not None:
-            data_files["train"] = data_args.train_file
-            extension = data_args.train_file.split(".")[-1]
-        if data_args.validation_file is not None:
-            data_files["validation"] = data_args.validation_file
-            extension = data_args.validation_file.split(".")[-1]
-        if data_args.test_file is not None:
-            data_files["test"] = data_args.test_file
-            extension = data_args.test_file.split(".")[-1]
-        raw_datasets = load_dataset(
-            extension,
-            data_files=data_files,
-            cache_dir=model_args.cache_dir,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+            raw_datasets = raw_train['train'].train_test_split(test_size=10000)
+            raw_datasets['validation'] = raw_datasets.pop('test')
+        else:
+            data_files = {}
+            if data_args.train_file is not None:
+                data_files["train"] = data_args.train_file
+                extension = data_args.train_file.split(".")[-1]
+            if data_args.validation_file is not None:
+                data_files["validation"] = data_args.validation_file
+                extension = data_args.validation_file.split(".")[-1]
+            if data_args.test_file is not None:
+                data_files["test"] = data_args.test_file
+                extension = data_args.test_file.split(".")[-1]
+            raw_datasets = load_dataset(
+                extension,
+                data_files=data_files,
+                cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
+            )
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
@@ -395,9 +410,9 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-
-    model, teacher_model, processor, teacher_tokenizer = get_pretrained_model(
-        kd_args, tokenizer, training_args.device)
+        
+    model, teacher_model, processor, teacher_tokenizer, vision_model = get_pretrained_model(
+        kd_args, tokenizer, training_args.device,training_args.local_rank)
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
@@ -422,40 +437,55 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
-    # for our dataset
-    source_attr = "caption_zh"
-    target_attr = "caption"
-    # for multilingual dataset
-    languages = ['zh', 'en'] if 'enzh' in training_args.run_name  else ['zh', 'en','cs','de','fr','ja']
+    source_attr = "target_text"
+    target_attr = "source_text"
+
     def preprocess_function(examples):
-        # uc2 dataset
-        if isinstance(examples['caption'][0], list):
-            targets = [dicts[0]['en'] for dicts in examples['caption']
-                       for language,caption in dicts[0].items() if language in languages and caption is not None ]
-            inputs = [dicts[0][language] for dicts in examples['caption']
-                      for language,caption in dicts[0].items() if language in languages and caption is not None ]
-        else:
-            inputs = [ex for ex in examples[source_attr]]
-            targets = [ex for ex in examples[target_attr]]
-        model_inputs = processor.tokenizer(
-            inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
-        teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,
-                                           padding=True, truncation=True, return_tensors='pt').to(training_args.device)
+
+        inputs = [ex for ex in examples[source_attr]]
+        targets = [ex for ex in examples[target_attr]]
+        model_inputs = processor(
+            inputs, max_length=data_args.max_source_length, padding=False, truncation=True)
+        teacher_inputs = teacher_tokenizer(
+            targets, max_length=data_args.max_source_length, padding=True, truncation=True, return_tensors='pt')
         with torch.no_grad():
             teacher_features = teacher_model(**teacher_inputs)[1]
             model_inputs['labels'] = teacher_features
-
         return model_inputs
-    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}{subset}".format(
-        teacher=kd_args.teacher_model.split('/')[-1],
-        seqlen=data_args.max_source_length,
-        file=data_args.train_file.split('/')[-1],
-        languages=len(languages) if len(languages) == 6 else languages,# for 6 languages
-        subset="300k" if '300k' in training_args.run_name else "" # for 300k subset
-    )
-    logger.info(
-        "if you change the teacher or data please check the fingerprint.")
-    logger.info(f"now fingerprint for train:{new_fingerprint}")
+    # # for our dataset
+    # source_attr = "caption_zh"
+    # target_attr = "caption"
+    # # for multilingual dataset
+    # languages = ['zh', 'en'] if 'enzh' in training_args.run_name  else ['zh', 'en','cs','de','fr','ja']
+    # def preprocess_function(examples):
+    #     # uc2 dataset
+    #     if isinstance(examples['caption'][0], list):
+    #         targets = [dicts[0]['en'] for dicts in examples['caption']
+    #                    for language,caption in dicts[0].items() if language in languages and caption is not None ]
+    #         inputs = [dicts[0][language] for dicts in examples['caption']
+    #                   for language,caption in dicts[0].items() if language in languages and caption is not None ]
+    #     else:
+    #         inputs = [ex for ex in examples[source_attr]]
+    #         targets = [ex for ex in examples[target_attr]]
+    #     model_inputs = processor.tokenizer(
+    #         inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+    #     teacher_inputs = teacher_tokenizer(targets, max_length=data_args.max_source_length,
+    #                                        padding=True, truncation=True, return_tensors='pt').to(training_args.device)
+    #     with torch.no_grad():
+    #         teacher_features = teacher_model(**teacher_inputs)[1]
+    #         model_inputs['labels'] = teacher_features
+
+    #     return model_inputs
+    # new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}{subset}".format(
+    #     teacher=kd_args.teacher_model.split('/')[-1],
+    #     seqlen=data_args.max_source_length,
+    #     file=data_args.train_file.split('/')[-1],
+    #     languages=len(languages) if len(languages) == 6 else languages,# for 6 languages
+    #     subset="300k" if '300k' in training_args.run_name else "" # for 300k subset
+    # )
+    # logger.info(
+    #     "if you change the teacher or data please check the fingerprint.")
+    # logger.info(f"now fingerprint for train:{new_fingerprint}")
 
     if training_args.do_train:
         if "train" not in raw_datasets:
@@ -469,41 +499,39 @@ def main():
             train_dataset = train_dataset.map(
                 preprocess_function,
                 batched=True,
-                batch_size=512,
-                num_proc=None,
+                num_proc=1,
                 remove_columns=column_names,
-                load_from_cache_file=True,
-                desc="Running tokenizer on train dataset",
-                new_fingerprint=new_fingerprint
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on prediction dataset",
+                # new_fingerprint=new_fingerprint
             )
 
-    new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}{subset}".format(
-        teacher=kd_args.teacher_model.split('/')[-1],
-        seqlen=data_args.max_source_length,
-        file=data_args.train_file.split('/')[-1],
-        languages=len(languages) if len(languages) == 6 else languages,# for 6 languages
-        subset="300k" if '300k' in training_args.run_name else ""
-    )
-    logger.info(f"now fingerprint for eval:{new_fingerprint}")
+    # new_fingerprint = "{teacher}_{seqlen}_{file}_{languages}{subset}".format(
+    #     teacher=kd_args.teacher_model.split('/')[-1],
+    #     seqlen=data_args.max_source_length,
+    #     file=data_args.train_file.split('/')[-1],
+    #     languages=len(languages) if len(languages) == 6 else languages,# for 6 languages
+    #     subset="300k" if '300k' in training_args.run_name else ""
+    # )
+    # logger.info(f"now fingerprint for eval:{new_fingerprint}")
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
         if "validation" not in raw_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = raw_datasets["validation"]
-        if data_args.max_eval_samples is not None :
+        if data_args.max_eval_samples is not None:
             max_eval_samples = min(
-                len(eval_dataset), data_args.max_eval_samples )
+                len(eval_dataset), data_args.max_eval_samples)
             eval_dataset = eval_dataset.select(range(max_eval_samples))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
                 preprocess_function,
                 batched=True,
-                batch_size=512,
-                num_proc=None,
+                num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
-                load_from_cache_file=True,
-                desc="Running tokenizer on validation dataset",
-                new_fingerprint=new_fingerprint
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on prediction dataset",
+                # new_fingerprint=new_fingerprint
             )
 
     if training_args.do_predict:
@@ -558,8 +586,8 @@ def main():
             # "di_mse":        di_mse_loss,
             # "mg_cossim":mg_cos_loss,
             # "mg_mse":        mg_mse_loss,
-            "cp_cossim":     cp_cos_loss,
-            "cp_mse":        cp_mse_loss,
+            # "cp_cossim":     cp_cos_loss,
+            # "cp_mse":        cp_mse_loss,
         }
 
         result = {k: round(v, 4) for k, v in result.items()}
@@ -664,9 +692,6 @@ def main():
             kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
         else:
             kwargs["dataset"] = data_args.dataset_name
-
-    if len(languages) > 0:
-        kwargs["language"] = languages
 
     if training_args.push_to_hub:
         trainer.push_to_hub(**kwargs)

@@ -367,17 +367,12 @@ def main():
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
-    if data_args.dataset_name is not None:
-        if True:
-            # load from local 
-            raw_datasets = datasets.load_from_disk(data_args.dataset_name)
-        else:
-        # Downloading and loading a dataset from the hub.
-            raw_datasets = load_dataset(
-                data_args.dataset_name,
-                cache_dir=model_args.cache_dir,
-                use_auth_token=True if model_args.use_auth_token else None,
-            )
+    if data_args.dataset_name is not None and data_args.dataset_name != 'none':
+        # load from local 
+        raw_datasets = datasets.load_from_disk(data_args.dataset_name)
+        datasets_ = raw_datasets.train_test_split(test_size=5000)
+        datasets_['validation'] = datasets_.pop('test')
+        raw_datasets = datasets_
     else:
         # data_files = {}
         data_files = glob(data_args.train_file)
@@ -396,7 +391,7 @@ def main():
             cache_dir=model_args.cache_dir,
             use_auth_token=True if model_args.use_auth_token else None,
         )
-        datasets_ = raw_datasets['train'].train_test_split(test_size=5000)
+        datasets_ = raw_datasets['train'].train_test_split(test_size=5000) 
         datasets_['validation'] = datasets_.pop('test')
         raw_datasets = datasets_
         
@@ -416,7 +411,7 @@ def main():
     # Distributed training:
     # The .from_pretrained methods guarantee that only one local process can concurrently
     eva=False 
-    mlm=False
+    mlm=True
     from transformers import PretrainedConfig
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     processor = CLIPProcessor.from_pretrained(kd_args.teacher_model)
@@ -430,6 +425,8 @@ def main():
         "alpha":kd_args.alpha,
         "learn_encoder":False,
         "kd_type":kd_args.kd_type,
+        "add_lm_task":mlm,
+        "eva":eva,
     }
     kd_config = PretrainedConfig(**kd_config_dict)
     if kd_args.kd_type == 'kd':
@@ -441,6 +438,7 @@ def main():
         pre_clip = AltCLIP.from_pretrained(kd_args.prekd_ckpt)
         model.student = pre_clip.text_model
         model.student_config = model.student.config
+        model.student.add_lm_task = True
     elif 'prekd' in kd_args.kd_type :
     # for pre kd
         model = KDmodel(kd_config)
@@ -538,6 +536,8 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="running tokenizer on train dataset",
             )
+            # train_dataset.save_to_disk("/sharefs/baai-mrnd/czz/m18_tokenized")
+            # print("save done.")
         if data_args.sub_train_file is not None:
             with training_args.main_process_first(desc="train dataset map pre-processing"):
                 sub_dataset = sub_dataset.map(

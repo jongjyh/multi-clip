@@ -97,9 +97,6 @@ class ChineseCLIP(CLIPPreTrainedModel):
         self.text_model = STUDENT_MODEL_DICT[text_config.model_type](text_config)
         self.vision_model = CLIPVisionTransformer(vision_config)
 
-        # self.clip_model = clip_model 
-        # self.set_clip_model(clip_model)
-
         self.visual_projection = nn.Linear(self.vision_embed_dim, self.projection_dim, bias=False)
         self.text_projection = nn.Linear(self.text_embed_dim, self.projection_dim, bias=False)
         self.logit_scale = nn.Parameter(torch.ones([]) * self.config.logit_scale_init_value)
@@ -458,7 +455,7 @@ class DoubleCLIP(CLIPPreTrainedModel):
         clip_model = OurCLIPModel.from_pretrained(config.vision_model_name)
 
         self.vision_model = clip_model.vision_model
-        self.text_teacher = clip_model.text_model
+        self.text_teacher = clip_model.text_model if self.variant == 'invert' else None
         
         # inverse module and clip.
         if self.variant == 'invert':
@@ -476,7 +473,7 @@ class DoubleCLIP(CLIPPreTrainedModel):
         self.text_projection.weight.data = clip_model.text_projection.weight.data
         self.logit_scale = nn.Parameter(torch.ones([]) * self.config.logit_scale_init_value)
         
-        self.freeze_clip()
+        if self.variant == 'invert': self.freeze_clip()
         
     def freeze_clip(self):
         assert isinstance(self.text_teacher,OurCLIPTextTransformer)

@@ -8,7 +8,7 @@ WANDB_PROJECT=clip-cts HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python run_c
     --model_name_or_path /sharefs/czz/save_ckpt/xlm768-
     --data_dir ./data \
     --train_file   \
-    --image_column image \
+    --image_column source_text \
     --caption_column caption \
     --remove_unused_columns=False \
     --do_train  --do_eval \

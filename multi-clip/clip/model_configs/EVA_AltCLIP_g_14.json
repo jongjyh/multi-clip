@@ -1,0 +1,13 @@
+{
+    "embed_dim": 1024,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 40,
+        "width": 1408,
+        "head_width": 88,
+        "mlp_ratio": 4.3637,
+        "patch_size": 14,
+        "drop_path_rate": 0.4
+    },
+    "text_cfg": "/home/chenzhongzhi/save_ckpt/kd_9lgs_18m_eva_debug"
+}

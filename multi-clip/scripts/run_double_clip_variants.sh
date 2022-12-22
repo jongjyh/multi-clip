@@ -11,37 +11,58 @@ bs=256
 warmup_steps=1000
 
 # direct is kd baseline, invert is bart-alike.
-# variant=direct
-variant=invert
+variant=direct
+# variant=invert
 
 # dataset setting
-uc2=1
-if [ $uc2 -eq 0 ] ;then
-    dst="/sharefs/czz/datasets/multi-clip/cc3m-zh"
-else
-    train="/sharefs/baai-mrnd/czz/datasets/cc3m_uc2/train_cc3m.json"
-    eval="/sharefs/baai-mrnd/czz/datasets/cc3m_uc2/eval_cc3m.json"
-    dst="none --train_file ${train} --validation_file ${eval}"
-fi
+# uc2=1
+# if [ $uc2 -eq 0 ] ;then
+#     dst="/sharefs/czz/datasets/multi-clip/cc3m-zh"
+# else
+#     train="/sharefs/baai-mrnd/czz/datasets/cc3m_uc2/train_cc3m.json"
+#     eval="/sharefs/baai-mrnd/czz/datasets/cc3m_uc2/eval_cc3m.json"
+#     dst="none --train_file ${train} --validation_file ${eval}"
+# fi
 
-# multi gpu setting
-gpus=4
+train='none  --train_file /sharefs/baai-mrnd/czz/datasets/la13m_para5m_multilingual/test_10k.json'
+dst="none --train_file ${train}"
+
+# multinode multigpu settings
+gpus=2
+nnodes=1
 if [ $gpus -gt 1 ] ;then
-    gpus="-m torch.distributed.launch --nproc_per_node $gpus"
+    gpus="-m torch.distributed.launch \
+    --nproc_per_node=$gpus "
+    if [ $nnodes -gt 1 ] ;then
+        source multinode.sh
+        port=29502
+        masterip=$masterip
+        gpus="${gpus} --nnodes=$nnodes \
+        --node_rank=$RLAUNCH_REPLICA \
+        --master_addr=$masterip \
+        --master_port=$port"
+    fi
 else
-    gpus=""
+    gpus="-m debugpy --listen 5678"
 fi
+# # multi gpu setting
+# gpus=4
+# if [ $gpus -gt 1 ] ;then
+#     gpus="-m torch.distributed.launch --nproc_per_node $gpus"
+# else
+#     gpus=""
+# fi
 
 # be careful to set languages, cause we use languages to hash dataset.
 # languages=enzh
 # languages=6lgs
-languages=6lgs_300k
-if echo $languages | grep -q "300k"; then
-    exp="${exp} --max_train_samples 300000"
-    echo "using 300k subset"
-else
-    echo "using full dataset"
-fi
+# languages=6lgs_300k
+# if echo $languages | grep -q "300k"; then
+#     exp="${exp} --max_train_samples 300000"
+#     echo "using 300k subset"
+# else
+#     echo "using full dataset"
+# fi
 run_name=${variant}_clandmse_cc3muc2_xlmBase_basep16_bs${bs}_wd${wd}_lr${lr}_ep${ep}_ws${warmup_steps}_doubleclip_$languages
 
 # debug setting
@@ -53,7 +74,6 @@ if [ $debug -eq 1 ] ;then
     "
     run_name=${run_name}_debug
     gpus="-m debugpy --listen 5678"
-    # gpus=""
 else
     debug=""
 fi
